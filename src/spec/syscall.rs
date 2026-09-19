@@ -1,5 +1,4 @@
 use vstd::prelude::*;
-use super::policy::{Arch, Event};
  
 verus! {
 
@@ -22,7 +21,8 @@ macro_rules! syscalls {
 
             impl $name {
                 #[allow(unreachable_patterns)]
-                pub closed spec fn to_nr(self, arch: Arch) -> Option<i32> {
+                pub closed spec fn to_nr(self, arch: super::policy::Arch) -> Option<i32> {
+                    use super::policy::*;
                     match self {
                         $(
                             $name::$variant => match arch {
