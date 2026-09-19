@@ -8,18 +8,7 @@ pub const ARG_COUNT_MAX: u32 = 6; // `src/arch.h`: ARG_COUNT_MAX
 pub const MAX_ERRNO: u32 = 4095;  // `src/system.h`: largest errno accepted by SCMP_ACT_ERRNO
 
 /// Architecture tokens `SCMP_ARCH_*` (excluding `SCMP_ARCH_NATIVE`).
-pub enum Arch {
-    X86, X86_64, X32,
-    Arm, Aarch64,
-    Loongarch64,
-    M68k,
-    Mips, Mipsel, Mips64, Mipsel64, Mips64n32, Mipsel64n32,
-    Parisc, Parisc64,
-    Ppc, Ppc64, Ppc64le,
-    S390, S390x,
-    Riscv64,
-    Sheb, Sh,
-}
+pub enum Arch { X86, X86_64, X32, Arm, Aarch64 }
 
 /// Filter actions (`SCMP_ACT_*`).
 pub enum Action {
@@ -49,10 +38,8 @@ pub struct ArgCmp {
 pub enum Syscall {
     /// `SCMP_SYS(name)` / `seccomp_syscall_resolve_name(name)`.
     Name(Seq<char>),
-    /// A raw number: `>= 0` is a native-arch syscall number, `<= -100` is a
-    /// `__PNR_*` pseudo-syscall number, `-1` is the tracer "skip" syscall
-    /// (only meaningful with `api_tskip`); `-2 ..= -99` are reserved.
-    Num(i32),
+    /// Syscall number `-1`. Only allowed with `api_tskip`.
+    Skip,
 }
 
 /// One `seccomp_rule_add[_exact][_array]` call.
@@ -132,17 +119,7 @@ impl Syscall {
     pub open spec fn wf(self, api_tskip: bool) -> bool {
         match self {
             Syscall::Name(_) => true,
-            Syscall::Num(n) => !(-99 <= n <= -1) || (n == -1 && api_tskip),
-        }
-    }
-}
-
-impl Arch {
-    pub open spec fn big_endian(self) -> bool {
-        match self {
-            Arch::M68k | Arch::Mips | Arch::Mips64 | Arch::Mips64n32 | Arch::Parisc
-            | Arch::Parisc64 | Arch::Ppc | Arch::Ppc64 | Arch::S390 | Arch::S390x | Arch::Sheb => true,
-            _ => false,
+            Syscall::Skip => api_tskip,
         }
     }
 }
@@ -167,13 +144,10 @@ impl Rule {
 }
 
 impl Policy {
-    /// `db_col_db_add`: no duplicate arch (-EEXIST), all arches share one endianness (-EDOM).
+    /// `db_col_db_add`: no duplicate arch (-EEXIST).
     pub open spec fn archs_wf(self) -> bool {
-        &&& forall |i: int, j: int| #![trigger self.archs[i], self.archs[j]]
-                0 <= i < j < self.archs.len() ==> self.archs[i] != self.archs[j]
-        &&& forall |i: int, j: int| #![trigger self.archs[i], self.archs[j]]
-                0 <= i < self.archs.len() && 0 <= j < self.archs.len()
-                    ==> self.archs[i].big_endian() == self.archs[j].big_endian()
+        forall |i: int, j: int| #![trigger self.archs[i], self.archs[j]]
+            0 <= i < j < self.archs.len() ==> self.archs[i] != self.archs[j]
     }
 
     pub open spec fn wf(self) -> bool {
