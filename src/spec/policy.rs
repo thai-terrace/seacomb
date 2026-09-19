@@ -1,7 +1,7 @@
 //! Abstract syntax and semantics of the libseccomp policy/rule language.
 
 use vstd::prelude::*;
-use super::syscall::*;
+pub use super::syscall::*;
 
 verus! {
 
