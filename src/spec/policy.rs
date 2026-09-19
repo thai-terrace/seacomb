@@ -43,7 +43,7 @@ pub enum Syscall {
 pub struct Rule {
     pub action: Action,
     pub syscall: Syscall,
-    pub conds: Seq<ArgCmp>,
+    pub conds: Vec<ArgCmp>,
     /// `true` for the `_exact` variants (fail instead of adapting the rule per arch).
     pub exact: bool,
 }
@@ -74,9 +74,9 @@ pub struct Attrs {
 /// A whole filter context (`scmp_filter_ctx`), viewed declaratively.
 pub struct Policy {
     pub attrs: Attrs,
-    pub archs: Seq<Arch>,
-    pub priorities: Seq<Priority>,
-    pub rules: Seq<Rule>,
+    pub archs: Vec<Arch>,
+    pub priorities: Vec<Priority>,
+    pub rules: Vec<Rule>,
 }
 
 impl Default for Optimize {
@@ -130,11 +130,11 @@ impl Rule {
 
     /// `db_col_rule_add`.
     pub open spec fn conds_wf(self) -> bool {
-        &&& self.conds.len() <= Self::ARG_COUNT_MAX as nat
-        &&& forall |i: int| #![trigger self.conds[i]]
-                0 <= i < self.conds.len() ==> self.conds[i].arg < Self::ARG_COUNT_MAX
-        &&& forall |i: int, j: int| #![trigger self.conds[i], self.conds[j]]
-                0 <= i < j < self.conds.len() ==> self.conds[i].arg != self.conds[j].arg
+        &&& self.conds@.len() <= Self::ARG_COUNT_MAX as nat
+        &&& forall |i: int| #![trigger self.conds@[i]]
+                0 <= i < self.conds@.len() ==> self.conds@[i].arg < Self::ARG_COUNT_MAX
+        &&& forall |i: int, j: int| #![trigger self.conds@[i], self.conds@[j]]
+                0 <= i < j < self.conds@.len() ==> self.conds@[i].arg != self.conds@[j].arg
     }
 
     /// `seccomp_rule_add*`.
@@ -149,19 +149,19 @@ impl Rule {
 impl Policy {
     /// `db_col_db_add`: no duplicate arch (-EEXIST).
     pub open spec fn archs_wf(self) -> bool {
-        forall |i: int, j: int| #![trigger self.archs[i], self.archs[j]]
-            0 <= i < j < self.archs.len() ==> self.archs[i] != self.archs[j]
+        forall |i: int, j: int| #![trigger self.archs@[i], self.archs@[j]]
+            0 <= i < j < self.archs@.len() ==> self.archs@[i] != self.archs@[j]
     }
 
     pub open spec fn wf(self) -> bool {
         &&& self.attrs.act_default.wf()
         &&& self.attrs.act_badarch.wf()
         &&& self.archs_wf()
-        &&& forall |i: int| #![trigger self.rules[i]]
-                0 <= i < self.rules.len() ==> self.rules[i].wf(self.attrs)
-        &&& forall |i: int| #![trigger self.priorities[i]]
-                0 <= i < self.priorities.len()
-                    ==> self.priorities[i].syscall.wf(self.attrs.api_tskip)
+        &&& forall |i: int| #![trigger self.rules@[i]]
+                0 <= i < self.rules@.len() ==> self.rules@[i].wf(self.attrs)
+        &&& forall |i: int| #![trigger self.priorities@[i]]
+                0 <= i < self.priorities@.len()
+                    ==> self.priorities@[i].syscall.wf(self.attrs.api_tskip)
     }
 }
 
@@ -174,7 +174,7 @@ verus! {
 pub struct Event {
     pub arch: u32,
     pub nr: i32,
-    pub args: Seq<u64>,
+    pub args: Vec<u64>,
 }
 
 /// Results of matching a syscall name against an event.
@@ -234,8 +234,8 @@ impl Arch {
 
 impl ArgCmp {
     /// `_db_rule_gen_64` / `_db_rule_gen_32`.
-    pub open spec fn holds(self, arch: Arch, args: Seq<u64>) -> bool {
-        let x = args[self.arg as int] & arch.mask();
+    pub open spec fn holds(self, arch: Arch, args: Vec<u64>) -> bool {
+        let x = args@[self.arg as int] & arch.mask();
         let a = self.datum_a & arch.mask();
         let b = self.datum_b & arch.mask();
         match self.op {
@@ -253,14 +253,14 @@ impl ArgCmp {
 impl Rule {
     /// Whether this rule matches event `ev` on `arch`.
     pub open spec fn eval(self, arch: Arch, ev: Event) -> bool {
-        let conds_hold = forall |i: int| #![trigger self.conds[i]]
-            0 <= i < self.conds.len() ==> self.conds[i].holds(arch, ev.args);
+        let conds_hold = forall |i: int| #![trigger self.conds@[i]]
+            0 <= i < self.conds@.len() ==> self.conds@[i].holds(arch, ev.args);
         match self.syscall {
             Syscall::Skip => ev.is_skip() && conds_hold,
             Syscall::Name(name) => match ev.matches_syscall(arch, name) {
                 SyscallMatch::Exact => conds_hold,
                 // This is stricter than libseccomp, which still evaluates the conditions on a multiplexed syscall.
-                SyscallMatch::Mux => self.conds.len() == 0,
+                SyscallMatch::Mux => self.conds@.len() == 0,
                 SyscallMatch::None => false,
             },
         }
@@ -269,11 +269,11 @@ impl Rule {
 
 impl Policy {
     pub open spec fn is_active_arch(self, arch: Arch, ev: Event) -> bool {
-        &&& self.archs.contains(arch)
+        &&& self.archs@.contains(arch)
         &&& ev.matches_arch(arch)
         // Some special cases when the policy supports both X86_64 and X32.
-        &&& arch == Arch::X86_64 ==> !ev.x32_bit() || ev.is_skip() || self.archs.contains(Arch::X32)
-        &&& arch == Arch::X32 ==> ev.x32_bit() || self.archs.contains(Arch::X86_64)
+        &&& arch == Arch::X86_64 ==> !ev.x32_bit() || ev.is_skip() || self.archs@.contains(Arch::X32)
+        &&& arch == Arch::X32 ==> ev.x32_bit() || self.archs@.contains(Arch::X86_64)
     }
 
     /// Defines whether evaluating the policy on event `ev`
@@ -286,17 +286,17 @@ impl Policy {
         // Exists a rule that, when evaluated on an active arch, matches the event and has the action `act`.
         ||| exists |a: Arch, i: int| {
             &&& self.is_active_arch(a, ev)
-            &&& 0 <= i < self.rules.len()
-            &&& #[trigger] self.rules[i].eval(a, ev)
-            &&& self.rules[i].action == act
+            &&& 0 <= i < self.rules@.len()
+            &&& #[trigger] self.rules@[i].eval(a, ev)
+            &&& self.rules@[i].action == act
         }
         // Take the default action when no rule matches on any active arch.
         ||| {
             &&& act == self.attrs.act_default
             &&& exists |a: Arch| #[trigger] self.is_active_arch(a, ev)
             &&& forall |a: Arch, i: int|
-                    self.is_active_arch(a, ev) && 0 <= i < self.rules.len()
-                    ==> !#[trigger] self.rules[i].eval(a, ev)
+                    self.is_active_arch(a, ev) && 0 <= i < self.rules@.len()
+                    ==> !#[trigger] self.rules@[i].eval(a, ev)
         }
     }
 

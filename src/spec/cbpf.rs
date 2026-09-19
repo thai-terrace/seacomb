@@ -68,7 +68,7 @@ pub enum Instr {
 
 /// `struct sock_fprog`.
 pub struct Program {
-    pub instrs: Seq<Instr>,
+    pub instrs: Vec<Instr>,
 }
 
 impl Instr {
@@ -110,10 +110,10 @@ impl Program {
     /// `check_load_and_stores()` analysis
     /// (<https://github.com/torvalds/linux/blob/40288c9206c17eb66a603262e06a58d300d0f279/net/core/filter.c#L935-L986>).
     pub open spec fn wf(self) -> bool {
-        &&& 0 < self.instrs.len() <= Self::MAX_INSTRS
-        &&& self.instrs.last() is Ret
-        &&& forall |pc: int| #![trigger self.instrs[pc]]
-                0 <= pc < self.instrs.len() ==> self.instrs[pc].wf(pc as nat, self.instrs.len())
+        &&& 0 < self.instrs@.len() <= Self::MAX_INSTRS
+        &&& self.instrs@.last() is Ret
+        &&& forall |pc: int| #![trigger self.instrs@[pc]]
+                0 <= pc < self.instrs@.len() ==> self.instrs@[pc].wf(pc as nat, self.instrs@.len())
     }
 }
 
@@ -236,20 +236,20 @@ impl Instr {
     /// `Err(outcome)` means execution terminates with `outcome`.
     ///
     /// `data` is the 64-byte image of `struct seccomp_data` in little endian.
-    pub open spec fn step(self, data: Seq<u8>, st: MachineState) -> Result<MachineState, Outcome> {
+    pub open spec fn step(self, data: &[u8], st: MachineState) -> Result<MachineState, Outcome> {
         match self {
             Instr::LdAbs(k) => {
-                if k + 4 <= data.len() {
+                if k + 4 <= data@.len() {
                     // Load the 32-bit word at byte offset `off` of `data`, the in-memory image of
                     // `struct seccomp_data`, in *little endian*.
                     // Unlike socket filters, seccomp context loads are not byte-swapped:
                     // `seccomp_check_filter()` rewrites `BPF_LD | BPF_W | BPF_ABS` into the
                     // kernel-internal `BPF_LDX | BPF_W | BPF_ABS`
                     // (<https://github.com/torvalds/linux/blob/40288c9206c17eb66a603262e06a58d300d0f279/kernel/seccomp.c#L287-L288>).
-                    let b0 = data[k as int] as u32;
-                    let b1 = data[k + 1] as u32;
-                    let b2 = data[k + 2] as u32;
-                    let b3 = data[k + 3] as u32;
+                    let b0 = data@[k as int] as u32;
+                    let b1 = data@[k + 1] as u32;
+                    let b2 = data@[k + 2] as u32;
+                    let b3 = data@[k + 3] as u32;
                     Ok(st.next_a(b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)))
                 } else {
                     // Rejected statically by `seccomp_check_filter()`.
@@ -269,7 +269,7 @@ impl Instr {
                     Err(Outcome::RuntimeError)
                 }
             }
-            Instr::LdxLen => Ok(st.next_x(data.len() as u32)),
+            Instr::LdxLen => Ok(st.next_x(data@.len() as u32)),
             Instr::LdxImm(k) => Ok(st.next_x(k)),
             Instr::LdxMem(k) => {
                 if k < st.mem.len() {
@@ -320,13 +320,13 @@ impl Instr {
 
 impl Program {
     /// Executes from an arbitrary machine state.
-    pub open spec fn eval_from(self, data: Seq<u8>, st: MachineState) -> Outcome
-        decreases self.instrs.len() - st.pc when self.wf()
+    pub open spec fn eval_from(self, data: &[u8], st: MachineState) -> Outcome
+        decreases self.instrs@.len() - st.pc when self.wf()
     {
-        if st.pc >= self.instrs.len() {
+        if st.pc >= self.instrs@.len() {
             Outcome::RuntimeError
         } else {
-            match self.instrs[st.pc as int].step(data, st) {
+            match self.instrs@[st.pc as int].step(data, st) {
                 Ok(next) => self.eval_from(data, next),
                 Err(outcome) => outcome,
             }
@@ -334,7 +334,7 @@ impl Program {
     }
 
     /// Runs the filter on one `struct seccomp_data` (in little endian).
-    pub open spec fn eval(self, data: Seq<u8>) -> Outcome
+    pub open spec fn eval(self, data: &[u8]) -> Outcome
         recommends self.wf()
     {
         self.eval_from(data, MachineState::init())
