@@ -23,7 +23,7 @@ pub enum Src { K(u32), X }
 /// Return value (`BPF_RVAL`): `BPF_K`, `BPF_A`.
 pub enum RetVal { K(u32), A }
 
-/// ALU operator allowed by seccomp (`BPF_OP` of class `BPF_ALU`, except `BPF_NEG`).
+/// ALU operator allowed by seccomp.
 pub enum AluOp { Add, Sub, Mul, Div, Or, And, Lsh, Rsh, Xor }
 
 /// Comparison of a conditional jump (`BPF_OP` of class `BPF_JMP`, except `BPF_JA`); unsigned.
@@ -123,10 +123,8 @@ impl Program {
 verus! {
 
 pub enum Outcome {
-    /// The filter's 32-bit return value.
     Return(u32),
-    /// The kernel would have rejected the program at load time.
-    Undefined,
+    RuntimeError,
 }
 
 pub struct MachineState {
@@ -237,13 +235,13 @@ impl Instr {
     /// `Ok(st)` means execution continues in `st`.
     /// `Err(outcome)` means execution terminates with `outcome`.
     ///
-    /// `data` is the 64-byte image of `struct seccomp_data` in host byte order.
+    /// `data` is the 64-byte image of `struct seccomp_data` in little endian.
     pub open spec fn step(self, data: Seq<u8>, st: MachineState) -> Result<MachineState, Outcome> {
         match self {
             Instr::LdAbs(k) => {
                 if k + 4 <= data.len() {
                     // Load the 32-bit word at byte offset `off` of `data`, the in-memory image of
-                    // `struct seccomp_data`, in *host byte order*.
+                    // `struct seccomp_data`, in *little endian*.
                     // Unlike socket filters, seccomp context loads are not byte-swapped:
                     // `seccomp_check_filter()` rewrites `BPF_LD | BPF_W | BPF_ABS` into the
                     // kernel-internal `BPF_LDX | BPF_W | BPF_ABS`
@@ -255,7 +253,7 @@ impl Instr {
                     Ok(st.next_a(b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)))
                 } else {
                     // Rejected statically by `seccomp_check_filter()`.
-                    Err(Outcome::Undefined)
+                    Err(Outcome::RuntimeError)
                 }
             }
             Instr::LdLen => Ok(st.next_a(data.len() as u32)),
@@ -265,10 +263,10 @@ impl Instr {
                     match st.mem[k as int] {
                         Some(v) => Ok(st.next_a(v)),
                         // `check_load_and_stores()`.
-                        None => Err(Outcome::Undefined),
+                        None => Err(Outcome::RuntimeError),
                     }
                 } else {
-                    Err(Outcome::Undefined)
+                    Err(Outcome::RuntimeError)
                 }
             }
             Instr::LdxLen => Ok(st.next_x(data.len() as u32)),
@@ -277,24 +275,24 @@ impl Instr {
                 if k < st.mem.len() {
                     match st.mem[k as int] {
                         Some(v) => Ok(st.next_x(v)),
-                        None => Err(Outcome::Undefined),
+                        None => Err(Outcome::RuntimeError),
                     }
                 } else {
-                    Err(Outcome::Undefined)
+                    Err(Outcome::RuntimeError)
                 }
             }
             Instr::St(k) => {
                 if k < st.mem.len() {
                     Ok(st.next_mem(k as int, st.a))
                 } else {
-                    Err(Outcome::Undefined)
+                    Err(Outcome::RuntimeError)
                 }
             }
             Instr::Stx(k) => {
                 if k < st.mem.len() {
                     Ok(st.next_mem(k as int, st.x))
                 } else {
-                    Err(Outcome::Undefined)
+                    Err(Outcome::RuntimeError)
                 }
             }
             // [`bpf_convert_filter()`](https://github.com/torvalds/linux/blob/40288c9206c17eb66a603262e06a58d300d0f279/net/core/filter.c#L693-L702).
@@ -326,7 +324,7 @@ impl Program {
         decreases self.instrs.len() - st.pc when self.wf()
     {
         if st.pc >= self.instrs.len() {
-            Outcome::Undefined
+            Outcome::RuntimeError
         } else {
             match self.instrs[st.pc as int].step(data, st) {
                 Ok(next) => self.eval_from(data, next),
@@ -335,7 +333,7 @@ impl Program {
         }
     }
 
-    /// Runs the filter on one `struct seccomp_data` (in host byte order).
+    /// Runs the filter on one `struct seccomp_data` (in little endian).
     pub open spec fn eval(self, data: Seq<u8>) -> Outcome
         recommends self.wf()
     {
