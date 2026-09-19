@@ -40,9 +40,7 @@ impl Syscall {
     /// `__x86_NR_ipc`.
     pub const X86_IPC: i32 = 117;
 
-    /// `src/syscalls.csv` column `self`: `Some(n)` with `n >= 0` if the syscall exists there
-    /// (`X32_SYSCALL_BIT` set for x32), `Some(pnr(name))` if the row says PNR, `None` if
-    /// libseccomp has no row for `name`.
+    /// `src/syscalls.csv`, `Some(pnr(name))` if the row says PNR.
     pub uninterp spec fn lookup(arch: Arch, name: Seq<char>) -> Option<i32>;
 
     /// `include/seccomp-syscalls.h`: the `__PNR_*` constant of `name` (`<= -100`), if it has one.
@@ -69,7 +67,7 @@ impl ArgCmp {
             Compare::Eq => x == a,
             Compare::Ge => x >= a,
             Compare::Gt => x > a,
-            Compare::MaskedEq => (x & a) == (b & a),
+            Compare::MaskedEq => x & a == b & a,
         }
     }
 }
@@ -80,8 +78,8 @@ impl Rule {
         &&& Syscall::pnr(name) matches Some(p)
         &&& {
             // Two special syscalls in X86 can be multiplexed.
-            ||| arch == Arch::X86 && Syscall::socket_family(p) && ev.nr == Syscall::X86_SOCKETCALL && (ev.args[0] & 0xFFFF_FFFF) == (-p % 100) as u64
-            ||| arch == Arch::X86 && Syscall::ipc_family(p) && ev.nr == Syscall::X86_IPC && (ev.args[0] & 0xFFFF_FFFF) == (-p % 200) as u64
+            ||| arch == Arch::X86 && Syscall::socket_family(p) && ev.nr == Syscall::X86_SOCKETCALL && ev.args[0] & 0xFFFF_FFFF == (-p % 100) as u64
+            ||| arch == Arch::X86 && Syscall::ipc_family(p) && ev.nr == Syscall::X86_IPC && ev.args[0] & 0xFFFF_FFFF == (-p % 200) as u64
         }
     }
 
