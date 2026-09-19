@@ -177,6 +177,14 @@ pub struct Event {
     pub args: Seq<u64>,
 }
 
+/// Results of matching a syscall name against an event.
+pub enum SyscallMatch {
+    Exact,
+    /// Matches a `socketcall` or `ipc` call.
+    Mux,
+    None,
+}
+
 impl Event {
     pub const SKIP_NR: i32 = -1;
 
@@ -192,6 +200,23 @@ impl Event {
             Arch::X86_64 | Arch::X32 => self.arch == 0xC000_003E,
             Arch::Arm => self.arch == 0x4000_0028,
             Arch::Aarch64 => self.arch == 0xC000_00B7,
+        }
+    }
+
+    /// Whether the syscall name matches the event and if it is an exact match or a multiplexed match.
+    pub open spec fn matches_syscall(self, arch: Arch, name: SyscallName) -> SyscallMatch {
+        if name.to_nr(arch) == Some(self.nr) {
+            SyscallMatch::Exact
+        } else if arch == Arch::X86 && {
+            // Matching against multiplexed `socketcall` or `ipc` on x86.
+            ||| Some(self.nr) == SyscallName::Socketcall.to_nr(arch)
+                && name.to_socketcall_arg() == Some(self.args[0] & 0xFFFF_FFFF)
+            ||| Some(self.nr) == SyscallName::Ipc.to_nr(arch)
+                && name.to_ipc_arg() == Some(self.args[0] & 0xFFFF_FFFF)
+        } {
+            SyscallMatch::Mux
+        } else {
+            SyscallMatch::None
         }
     }
 }
