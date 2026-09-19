@@ -2,6 +2,7 @@
 
 use vstd::prelude::*;
 pub use super::syscall::*;
+use super::cbpf::Outcome;
 
 verus! {
 
@@ -174,7 +175,7 @@ verus! {
 pub struct Event {
     pub arch: u32,
     pub nr: i32,
-    pub args: Vec<u64>,
+    pub args: Seq<u64>,
 }
 
 /// Results of matching a syscall name against an event.
@@ -219,6 +220,68 @@ impl Event {
             SyscallMatch::None
         }
     }
+
+    /// Parses a (little-endian) `seccomp_data` from the kernel into an `Event`.
+    /// TODO: Use Vest.
+    pub open spec fn parse(data: &[u8]) -> Option<Event> {
+        if data@.len() != 64 {
+            None
+        } else {
+            Some(Event {
+                nr: ((data@[0] as u32) | (data@[1] as u32) << 8 | (data@[2] as u32) << 16 | (data@[3] as u32) << 24) as i32,
+                arch: (data@[4] as u32) | (data@[5] as u32) << 8 | (data@[6] as u32) << 16 | (data@[7] as u32) << 24,
+                // Offset 8 is `instruction_pointer`, which `Event` drops.
+                args: Seq::new(
+                    Rule::ARG_COUNT_MAX as nat,
+                    |k: int| (data@[16 + 8 * k] as u64)
+                        | (data@[17 + 8 * k] as u64) << 8
+                        | (data@[18 + 8 * k] as u64) << 16
+                        | (data@[19 + 8 * k] as u64) << 24
+                        | (data@[20 + 8 * k] as u64) << 32
+                        | (data@[21 + 8 * k] as u64) << 40
+                        | (data@[22 + 8 * k] as u64) << 48
+                        | (data@[23 + 8 * k] as u64) << 56,
+                ),
+            })
+        }
+    }
+}
+
+impl Action {
+    pub const RET_ACTION_FULL: u32 = 0xffff_0000;
+    pub const RET_DATA: u32 = 0x0000_ffff;
+    pub const RET_KILL_PROCESS: u32 = 0x8000_0000;
+    pub const RET_KILL_THREAD: u32 = 0x0000_0000;
+    pub const RET_TRAP: u32 = 0x0003_0000;
+    pub const RET_ERRNO: u32 = 0x0005_0000;
+    pub const RET_USER_NOTIF: u32 = 0x7fc0_0000;
+    pub const RET_TRACE: u32 = 0x7ff0_0000;
+    pub const RET_LOG: u32 = 0x7ffc_0000;
+    pub const RET_ALLOW: u32 = 0x7fff_0000;
+
+    /// Converts a BPF filter return value back to `Action`.
+    pub open spec fn from_ret(ret: u32) -> Action {
+        let action = ret & Self::RET_ACTION_FULL;
+        let data = (ret & Self::RET_DATA) as u16;
+        if action == Self::RET_ALLOW {
+            Action::Allow
+        } else if action == Self::RET_LOG {
+            Action::Log
+        } else if action == Self::RET_USER_NOTIF {
+            Action::Notify
+        } else if action == Self::RET_TRACE {
+            Action::Trace(data)
+        } else if action == Self::RET_ERRNO {
+            Action::Errno(data)
+        } else if action == Self::RET_TRAP {
+            Action::Trap(data)
+        } else if action == Self::RET_KILL_THREAD {
+            Action::KillThread
+        } else {
+            // RET_KILL_PROCESS and every other action value.
+            Action::KillProcess
+        }
+    }
 }
 
 impl Arch {
@@ -234,8 +297,8 @@ impl Arch {
 
 impl ArgCmp {
     /// `_db_rule_gen_64` / `_db_rule_gen_32`.
-    pub open spec fn holds(self, arch: Arch, args: Vec<u64>) -> bool {
-        let x = args@[self.arg as int] & arch.mask();
+    pub open spec fn holds(self, arch: Arch, args: Seq<u64>) -> bool {
+        let x = args[self.arg as int] & arch.mask();
         let a = self.datum_a & arch.mask();
         let b = self.datum_b & arch.mask();
         match self.op {
