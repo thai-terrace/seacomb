@@ -1,0 +1,4 @@
+
+```
+cargo verus verify/build
+```
