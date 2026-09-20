@@ -118,6 +118,13 @@ impl Arch {
         }
     }
 
+    /// Executable version of [`Arch::mask`], which only ever says 32 or 64 bits.
+    fn is_64bit(self) -> (res: bool)
+        ensures res == (self.mask() == u64::MAX)
+    {
+        self == Arch::X86_64 || self == Arch::Aarch64
+    }
+
     /// Emits the guard that tells apart the x86_64 and x32 syscalls.
     ///
     /// ```text
@@ -238,6 +245,90 @@ impl Syscall {
     }
 }
 
+impl ArgCmp {
+    /// Emits this test of one argument, jumping to `fail` when it does not hold and
+    /// falling through when it does.
+    ///
+    /// A 64-bit architecture takes two words per argument, and cBPF compares one word
+    /// at a time, so an ordering test there settles on the high word unless the two
+    /// are equal.
+    fn emit(&self, b: &mut Builder, arch: Arch, fail: Label) -> Result<(), CompileError>
+        requires
+            self.arg < Rule::ARG_COUNT_MAX,
+            fail <= b.rev@.len(),
+        ensures old(b).rev@.len() <= final(b).rev@.len()
+    {
+        let pass = b.label();
+        let lo = Policy::OFFSET_EVENT_ARGS + 8 * self.arg;
+        let hi = lo + 4;
+        let a_lo = self.datum_a as u32;
+        let a_hi = (self.datum_a >> 32) as u32;
+        let b_lo = self.datum_b as u32;
+        let b_hi = (self.datum_b >> 32) as u32;
+
+        if !arch.is_64bit() {
+            match self.op {
+                Compare::Ne => b.emit_jump(JmpOp::Eq, Src::K(a_lo), true, fail)?,
+                Compare::Eq => b.emit_jump(JmpOp::Eq, Src::K(a_lo), false, fail)?,
+                Compare::Lt => b.emit_jump(JmpOp::Ge, Src::K(a_lo), true, fail)?,
+                Compare::Le => b.emit_jump(JmpOp::Gt, Src::K(a_lo), true, fail)?,
+                Compare::Ge => b.emit_jump(JmpOp::Ge, Src::K(a_lo), false, fail)?,
+                Compare::Gt => b.emit_jump(JmpOp::Gt, Src::K(a_lo), false, fail)?,
+                Compare::MaskedEq => {
+                    b.emit_jump(JmpOp::Eq, Src::K(b_lo & a_lo), false, fail)?;
+                    b.emit(Instr::Alu(AluOp::And, Src::K(a_lo)))?;
+                }
+            }
+            return b.emit(Instr::LdAbs(lo));
+        }
+
+        match self.op {
+            Compare::Eq => {
+                b.emit_jump(JmpOp::Eq, Src::K(a_lo), false, fail)?;
+                b.emit(Instr::LdAbs(lo))?;
+                b.emit_jump(JmpOp::Eq, Src::K(a_hi), false, fail)?;
+            }
+            Compare::Ne => {
+                b.emit_jump(JmpOp::Eq, Src::K(a_lo), true, fail)?;
+                b.emit(Instr::LdAbs(lo))?;
+                b.emit_jump(JmpOp::Eq, Src::K(a_hi), false, pass)?;
+            }
+            Compare::Lt => {
+                b.emit_jump(JmpOp::Ge, Src::K(a_lo), true, fail)?;
+                b.emit(Instr::LdAbs(lo))?;
+                b.emit_jump(JmpOp::Eq, Src::K(a_hi), false, pass)?;
+                b.emit_jump(JmpOp::Gt, Src::K(a_hi), true, fail)?;
+            }
+            Compare::Le => {
+                b.emit_jump(JmpOp::Gt, Src::K(a_lo), true, fail)?;
+                b.emit(Instr::LdAbs(lo))?;
+                b.emit_jump(JmpOp::Eq, Src::K(a_hi), false, pass)?;
+                b.emit_jump(JmpOp::Gt, Src::K(a_hi), true, fail)?;
+            }
+            Compare::Gt => {
+                b.emit_jump(JmpOp::Gt, Src::K(a_lo), false, fail)?;
+                b.emit(Instr::LdAbs(lo))?;
+                b.emit_jump(JmpOp::Eq, Src::K(a_hi), false, fail)?;
+                b.emit_jump(JmpOp::Gt, Src::K(a_hi), true, pass)?;
+            }
+            Compare::Ge => {
+                b.emit_jump(JmpOp::Ge, Src::K(a_lo), false, fail)?;
+                b.emit(Instr::LdAbs(lo))?;
+                b.emit_jump(JmpOp::Eq, Src::K(a_hi), false, fail)?;
+                b.emit_jump(JmpOp::Gt, Src::K(a_hi), true, pass)?;
+            }
+            Compare::MaskedEq => {
+                b.emit_jump(JmpOp::Eq, Src::K(b_lo & a_lo), false, fail)?;
+                b.emit(Instr::Alu(AluOp::And, Src::K(a_lo)))?;
+                b.emit(Instr::LdAbs(lo))?;
+                b.emit_jump(JmpOp::Eq, Src::K(b_hi & a_hi), false, fail)?;
+                b.emit(Instr::Alu(AluOp::And, Src::K(a_hi)))?;
+            }
+        }
+        b.emit(Instr::LdAbs(hi))
+    }
+}
+
 impl Rule {
     /// Emits the test that reaches this rule at syscall number `nr`, and the rule's
     /// body under it.
@@ -251,6 +342,7 @@ impl Rule {
     /// end:
     /// ```
     fn emit(&self, b: &mut Builder, arch: Arch, nr: u32, a_live: bool) -> Result<(), CompileError>
+        requires self.conds_wf()
         ensures old(b).rev@.len() <= final(b).rev@.len()
     {
         let end = b.label();
@@ -262,11 +354,68 @@ impl Rule {
     }
 
     /// Emits whatever this rule tests beyond the syscall number, then its action.
-    #[verifier::external_body]
+    ///
+    /// Forward layout, with `end` just past the body:
+    ///
+    /// ```text
+    ///     <test of one argument> -> end
+    ///     ...
+    ///     ret #action
+    /// end:
+    /// ```
+    /// Reached through a multiplexer, the rule's own syscall is what the multiplexer
+    /// selects on, and that selector is the only test:
+    /// ```text
+    ///     ld  [arg 0]
+    ///     jne #selector -> end
+    ///     ret #action
+    /// end:
+    /// ```
     fn emit_body(&self, b: &mut Builder, arch: Arch, nr: u32) -> Result<(), CompileError>
+        requires self.conds_wf()
         ensures old(b).rev@.len() <= final(b).rev@.len()
     {
-        todo!()
+        let end = b.label();
+        b.emit(Instr::Ret(RetVal::K(self.action.to_ret())))?;
+
+        if let Some(arg) = self.mux_arg(arch) {
+            if self.mux_nr(arch) == Some(nr) {
+                b.emit_jump(JmpOp::Eq, Src::K(arg), false, end)?;
+                return b.emit(Instr::LdAbs(Policy::OFFSET_EVENT_ARGS));
+            }
+        }
+
+        let mut i = self.conds.len();
+        while i > 0
+            invariant
+                i <= self.conds@.len(),
+                self.conds_wf(),
+                end <= b.rev@.len(),
+                old(b).rev@.len() <= b.rev@.len(),
+            decreases i
+        {
+            i -= 1;
+            self.conds[i].emit(b, arch, end)?;
+        }
+        Ok(())
+    }
+
+    /// The call number the x86 multiplexer selects this rule's syscall on, if one
+    /// reaches it.
+    fn mux_arg(&self, arch: Arch) -> Option<u32> {
+        if arch != Arch::X86 || self.conds.len() > 0 {
+            return None;
+        }
+        match &self.syscall {
+            Syscall::Skip => None,
+            Syscall::Name(name) => match name.socketcall_arg() {
+                Some(arg) => Some(arg as u32),
+                None => match name.ipc_arg() {
+                    Some(arg) => Some(arg as u32),
+                    None => None,
+                },
+            },
+        }
     }
 
     /// The number of the x86 multiplexer that also reaches this rule, if one does.
@@ -302,6 +451,9 @@ impl Policy {
 
     /// Byte offset of `seccomp_data.arch`.
     const OFFSET_EVENT_ARCH: u32 = 4;
+
+    /// Byte offset of the low half of `seccomp_data.args[0]`.
+    const OFFSET_EVENT_ARGS: u32 = 16;
 
     /// Lowers the policy into a filter program.
     #[verifier::external_body]
@@ -355,6 +507,7 @@ impl Policy {
     /// end:
     /// ```
     fn emit_arch_block(&self, b: &mut Builder, arch: Arch) -> Result<(), CompileError>
+        requires self.wf()
         ensures old(b).rev@.len() <= final(b).rev@.len()
     {
         let end = b.label();
@@ -369,6 +522,7 @@ impl Policy {
     /// Emits the dispatch of one architecture, entered with `A` holding
     /// `seccomp_data.nr` and falling through when no rule of `arch` matches the event.
     fn emit_arch(&self, b: &mut Builder, arch: Arch) -> Result<(), CompileError>
+        requires self.wf()
         ensures old(b).rev@.len() <= final(b).rev@.len()
     {
         // One test per rule, in the policy's order. Only the last of them falls through
@@ -378,10 +532,13 @@ impl Policy {
         while i > 0
             invariant
                 i <= self.rules@.len(),
+                self.wf(),
                 old(b).rev@.len() <= b.rev@.len(),
             decreases i
         {
             i -= 1;
+            assert(self.rules@[i as int].wf(self.attrs));
+
             // x86 reaches some rules a second time through the socketcall or ipc
             // multiplexer, which answers to a number of its own.
             if let Some(nr) = self.rules[i].mux_nr(arch) {
