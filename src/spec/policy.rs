@@ -2,7 +2,6 @@
 
 use vstd::prelude::*;
 pub use super::syscall::*;
-use super::cbpf::Outcome;
 
 verus! {
 
