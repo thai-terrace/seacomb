@@ -29,9 +29,11 @@ provision:
   script: |
     #!/bin/bash
     set -eux -o pipefail
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update
-    apt-get install -y build-essential curl
+    if ! command -v cc >/dev/null; then
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update
+      apt-get install -y build-essential curl
+    fi
 # Rustup, symlinked into a directory that is already on PATH.
 - mode: system
   script: |

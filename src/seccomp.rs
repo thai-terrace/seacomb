@@ -231,7 +231,9 @@ mod tests {
     impl Arch {
         /// The architecture this test binary runs on.
         fn native() -> Arch {
-            if cfg!(target_arch = "x86_64") {
+            if cfg!(all(target_arch = "x86_64", target_pointer_width = "32")) {
+                Arch::X32
+            } else if cfg!(target_arch = "x86_64") {
                 Arch::X86_64
             } else if cfg!(target_arch = "aarch64") {
                 Arch::Aarch64
