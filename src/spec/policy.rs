@@ -207,13 +207,13 @@ impl Event {
 
     /// Whether the syscall name matches the event and if it is an exact match or a multiplexed match.
     pub open spec fn matches_syscall(self, arch: Arch, name: SyscallName) -> SyscallMatch {
-        if name.to_nr(arch) == Some(self.nr) {
+        if name.nr(arch) == Some(self.nr) {
             SyscallMatch::Exact
         } else if arch == Arch::X86 && {
             // Matching against multiplexed `socketcall` or `ipc` on x86.
-            ||| Some(self.nr) == SyscallName::Socketcall.to_nr(arch)
+            ||| Some(self.nr) == SyscallName::Socketcall.nr(arch)
                 && name.to_socketcall_arg() == Some(self.args[0] & 0xFFFF_FFFF)
-            ||| Some(self.nr) == SyscallName::Ipc.to_nr(arch)
+            ||| Some(self.nr) == SyscallName::Ipc.nr(arch)
                 && name.to_ipc_arg() == Some(self.args[0] & 0xFFFF_FFFF)
         } {
             SyscallMatch::Mux

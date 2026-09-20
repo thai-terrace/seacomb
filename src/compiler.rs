@@ -151,15 +151,6 @@ impl Arch {
 }
 
 impl SyscallName {
-    /// Executable version of [`SyscallName::to_nr`].
-    // Needs a table generated alongside `to_nr` by the `syscalls!` macro in `src/spec/syscall.rs`.
-    #[verifier::external_body]
-    pub fn nr(&self, arch: Arch) -> (res: Option<i32>)
-        ensures res == self.to_nr(arch)
-    {
-        todo!()
-    }
-
     /// Executable version of [`SyscallName::to_socketcall_arg`].
     pub fn socketcall_arg(&self) -> (res: Option<u64>)
         ensures res == self.to_socketcall_arg()

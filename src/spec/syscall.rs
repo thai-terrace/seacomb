@@ -2,7 +2,7 @@ use vstd::prelude::*;
  
 verus! {
 
-/// A helper macro to define the `SyscallName` enum and its `SyscallName::to_nr` function.
+/// A helper macro to define the `SyscallName` enum and its `SyscallName::nr` function.
 macro_rules! syscalls {
     (
         $(#[$meta:meta])*
@@ -21,7 +21,24 @@ macro_rules! syscalls {
 
             impl $name {
                 #[allow(unreachable_patterns)]
-                pub closed spec fn to_nr(self, arch: super::policy::Arch) -> Option<i32> {
+                pub closed spec fn spec_nr(&self, arch: super::policy::Arch) -> Option<i32> {
+                    use super::policy::*;
+                    match self {
+                        $(
+                            $name::$variant => match arch {
+                                $( $arch => Some(($nr) as i32), )*
+                                _ => None,
+                            },
+                        )*
+                    }
+                }
+
+                /// Executable version of [`Self::spec_nr`].
+                #[allow(unreachable_patterns)]
+                #[verifier::when_used_as_spec(spec_nr)]
+                pub fn nr(&self, arch: super::policy::Arch) -> (res: Option<i32>)
+                    ensures res == self.spec_nr(arch)
+                {
                     use super::policy::*;
                     match self {
                         $(
