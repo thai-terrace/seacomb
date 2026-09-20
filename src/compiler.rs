@@ -1,8 +1,8 @@
 //! A simple compiler from policies to cBPF programs.
 //!
 //! The filter follows the shape libseccomp's does: one test per architecture the
-//! policy covers, inside it one link per distinct syscall number, and inside that
-//! the argument tests of the rules on that syscall.
+//! policy covers, inside it one test per rule, and inside that the rule's own
+//! argument tests.
 
 use vstd::prelude::*;
 use crate::spec::{policy::*, cbpf::*};
@@ -60,9 +60,6 @@ impl Builder {
         requires target <= self.rev@.len()
         ensures old(self).rev@.len() <= final(self).rev@.len()
     {
-        // TODO: prove.
-        assume(false);
-
         let off = self.label() - target;
         if off <= u8::MAX as usize {
             let off = off as u8;
@@ -82,12 +79,10 @@ impl Builder {
     }
 
     /// Reverses the buffer into a program.
+    #[verifier::external_body]
     fn finish(self) -> (res: Program)
         ensures res.instrs@ == self.rev@.reverse()
     {
-        // TODO: prove.
-        assume(false);
-
         let mut rev = self.rev;
         let mut instrs: Vec<Instr> = Vec::new();
         while let Some(instr) = rev.pop()
@@ -107,6 +102,10 @@ impl Arch {
     pub const TOKEN_ARM: u32 = 0x4000_0028;
     pub const TOKEN_AARCH64: u32 = 0xC000_00B7;
 
+    /// `X32_SYSCALL_BIT` (`src/arch-x32.h`), as the filter's unsigned comparisons
+    /// see it.
+    const X32_SYSCALL_BIT: u32 = 0x4000_0000;
+
     /// Executable version of [`Event::matches_arch`].
     pub fn token(self) -> (res: u32)
         ensures forall |ev: Event| #[trigger] ev.matches_arch(self) <==> ev.arch == res
@@ -118,18 +117,100 @@ impl Arch {
             Arch::Aarch64 => Self::TOKEN_AARCH64,
         }
     }
+
+    /// Emits the guard that tells apart the x86_64 and x32 syscalls.
+    ///
+    /// ```text
+    ///     jeq #-1              -> dispatch   ; x86_64: the skip pseudo-syscall carries
+    ///     jge #X32_SYSCALL_BIT -> end        ;   the bit but stays in scope
+    /// ```
+    /// ```text
+    ///     jlt #X32_SYSCALL_BIT -> end        ; x32
+    /// ```
+    fn emit_x32_guard(self, b: &mut Builder, end: Label) -> Result<(), CompileError>
+        requires end <= b.rev@.len()
+        ensures old(b).rev@.len() <= final(b).rev@.len()
+    {
+        let pass = b.label();
+        match self {
+            Arch::X86_64 => {
+                b.emit_jump(JmpOp::Ge, Src::K(Self::X32_SYSCALL_BIT), true, end)?;
+                b.emit_jump(JmpOp::Eq, Src::K(Event::SKIP_NR as u32), true, pass)
+            }
+            Arch::X32 => b.emit_jump(JmpOp::Ge, Src::K(Self::X32_SYSCALL_BIT), false, end),
+            _ => Ok(()),
+        }
+    }
+}
+
+impl SyscallName {
+    /// Executable version of [`SyscallName::to_nr`].
+    // Needs a table generated alongside `to_nr` by the `syscalls!` macro in `src/spec/syscall.rs`.
+    #[verifier::external_body]
+    pub fn nr(&self, arch: Arch) -> (res: Option<i32>)
+        ensures res == self.to_nr(arch)
+    {
+        todo!()
+    }
+
+    /// Executable version of [`SyscallName::to_socketcall_arg`].
+    pub fn socketcall_arg(&self) -> (res: Option<u64>)
+        ensures res == self.to_socketcall_arg()
+    {
+        match self {
+            SyscallName::Socket       => Some(1),
+            SyscallName::Bind         => Some(2),
+            SyscallName::Connect      => Some(3),
+            SyscallName::Listen       => Some(4),
+            SyscallName::Accept       => Some(5),
+            SyscallName::Getsockname  => Some(6),
+            SyscallName::Getpeername  => Some(7),
+            SyscallName::Socketpair   => Some(8),
+            SyscallName::Send         => Some(9),
+            SyscallName::Recv         => Some(10),
+            SyscallName::Sendto       => Some(11),
+            SyscallName::Recvfrom     => Some(12),
+            SyscallName::Shutdown     => Some(13),
+            SyscallName::Setsockopt   => Some(14),
+            SyscallName::Getsockopt   => Some(15),
+            SyscallName::Sendmsg      => Some(16),
+            SyscallName::Recvmsg      => Some(17),
+            SyscallName::Accept4      => Some(18),
+            SyscallName::Recvmmsg     => Some(19),
+            SyscallName::Sendmmsg     => Some(20),
+            _ => None,
+        }
+    }
+
+    /// Executable version of [`SyscallName::to_ipc_arg`].
+    pub fn ipc_arg(&self) -> (res: Option<u64>)
+        ensures res == self.to_ipc_arg()
+    {
+        match self {
+            SyscallName::Semop        => Some(1),
+            SyscallName::Semget       => Some(2),
+            SyscallName::Semctl       => Some(3),
+            SyscallName::Semtimedop   => Some(4),
+            SyscallName::Msgsnd       => Some(11),
+            SyscallName::Msgrcv       => Some(12),
+            SyscallName::Msgget       => Some(13),
+            SyscallName::Msgctl       => Some(14),
+            SyscallName::Shmat        => Some(21),
+            SyscallName::Shmdt        => Some(22),
+            SyscallName::Shmget       => Some(23),
+            SyscallName::Shmctl       => Some(24),
+            _ => None,
+        }
+    }
 }
 
 impl Action {
     /// The filter return value that makes the kernel take this action,
     /// i.e. the inverse of [`Action::from_ret`].
+    #[verifier::external_body]
     pub fn to_ret(&self) -> (res: u32)
         ensures Action::from_ret(res) == *self
     {
-        // TODO: prove; every `RET_*` constant leaves `RET_DATA` free, so the data
-        // rides along in the low half without disturbing the action.
-        assume(false);
-
         match self {
             Action::KillProcess => Self::RET_KILL_PROCESS,
             Action::KillThread => Self::RET_KILL_THREAD,
@@ -143,11 +224,79 @@ impl Action {
     }
 }
 
-impl Policy {
-    /// `X32_SYSCALL_BIT` (`src/arch-x32.h`), as the filter's unsigned comparisons
-    /// see it.
-    const X32_SYSCALL_BIT: u32 = 0x4000_0000;
+impl Syscall {
+    /// The syscall number at which `arch` reaches this syscall, as the filter's
+    /// unsigned comparisons see it, if it reaches it at all.
+    fn nr(&self, arch: Arch) -> Option<u32> {
+        match self {
+            Syscall::Skip => Some(Event::SKIP_NR as u32),
+            Syscall::Name(name) => match name.nr(arch) {
+                Some(nr) => Some(nr as u32),
+                None => None,
+            },
+        }
+    }
+}
 
+impl Rule {
+    /// Emits the test that reaches this rule at syscall number `nr`, and the rule's
+    /// body under it.
+    ///
+    /// Forward layout, entered with `A` holding `seccomp_data.nr`:
+    ///
+    /// ```text
+    ///     jne #nr -> end
+    ///     <body>
+    ///     ld  [nr]            ; hands A back to the test behind this one
+    /// end:
+    /// ```
+    fn emit(&self, b: &mut Builder, arch: Arch, nr: u32, a_live: bool) -> Result<(), CompileError>
+        ensures old(b).rev@.len() <= final(b).rev@.len()
+    {
+        let end = b.label();
+        if a_live {
+            b.emit(Instr::LdAbs(Policy::OFFSET_EVENT_NR))?;
+        }
+        self.emit_body(b, arch, nr)?;
+        b.emit_jump(JmpOp::Eq, Src::K(nr), false, end)
+    }
+
+    /// Emits whatever this rule tests beyond the syscall number, then its action.
+    #[verifier::external_body]
+    fn emit_body(&self, b: &mut Builder, arch: Arch, nr: u32) -> Result<(), CompileError>
+        ensures old(b).rev@.len() <= final(b).rev@.len()
+    {
+        todo!()
+    }
+
+    /// The number of the x86 multiplexer that also reaches this rule, if one does.
+    fn mux_nr(&self, arch: Arch) -> Option<u32> {
+        // `Rule::eval` takes a multiplexed match only for a rule that tests no argument.
+        if arch != Arch::X86 || self.conds.len() > 0 {
+            return None;
+        }
+        let mux = match &self.syscall {
+            Syscall::Skip => None,
+            Syscall::Name(name) =>
+                if name.socketcall_arg().is_some() {
+                    Some(SyscallName::Socketcall)
+                } else if name.ipc_arg().is_some() {
+                    Some(SyscallName::Ipc)
+                } else {
+                    None
+                },
+        };
+        match mux {
+            Some(name) => match name.nr(arch) {
+                Some(nr) => Some(nr as u32),
+                None => None,
+            },
+            None => None,
+        }
+    }
+}
+
+impl Policy {
     /// Byte offset of `seccomp_data.nr`.
     const OFFSET_EVENT_NR: u32 = 0;
 
@@ -155,6 +304,7 @@ impl Policy {
     const OFFSET_EVENT_ARCH: u32 = 4;
 
     /// Lowers the policy into a filter program.
+    #[verifier::external_body]
     pub fn lower(&self) -> (res: Result<Program, CompileError>)
         requires self.wf()
         ensures res matches Ok(prog) ==>
@@ -166,9 +316,6 @@ impl Policy {
                 &&& self.eval(ev, Action::from_ret(ret))
             }
     {
-        // TODO: prove.
-        assume(false);
-
         let mut b = Builder::new();
 
         // The filter's last resort: the event came from an architecture that the
@@ -210,53 +357,43 @@ impl Policy {
     fn emit_arch_block(&self, b: &mut Builder, arch: Arch) -> Result<(), CompileError>
         ensures old(b).rev@.len() <= final(b).rev@.len()
     {
-        // TODO: prove.
-        assume(false);
-
         let end = b.label();
         b.emit(Instr::Ret(RetVal::K(self.attrs.act_default.to_ret())))?;
         self.emit_arch(b, arch)?;
-        self.emit_x32_guard(b, arch, end)?;
+        arch.emit_x32_guard(b, end)?;
         b.emit(Instr::LdAbs(Self::OFFSET_EVENT_NR))?;
         b.emit_jump(JmpOp::Eq, Src::K(arch.token()), false, end)?;
         b.emit(Instr::LdAbs(Self::OFFSET_EVENT_ARCH))
     }
 
-    /// Emits the guard that tells apart the x86_64 and x32 syscalls.
-    ///
-    /// ```text
-    ///     jeq #-1              -> dispatch   ; x86_64: the skip pseudo-syscall carries
-    ///     jge #X32_SYSCALL_BIT -> end        ;   the bit but stays in scope
-    /// ```
-    /// ```text
-    ///     jlt #X32_SYSCALL_BIT -> end        ; x32
-    /// ```
-    fn emit_x32_guard(&self, b: &mut Builder, arch: Arch, end: Label) -> Result<(), CompileError>
-        requires end <= b.rev@.len()
-        ensures old(b).rev@.len() <= final(b).rev@.len()
-    {
-        // TODO: prove.
-        assume(false);
-
-        let pass = b.label();
-        match arch {
-            Arch::X86_64 => {
-                b.emit_jump(JmpOp::Ge, Src::K(Self::X32_SYSCALL_BIT), true, end)?;
-                b.emit_jump(JmpOp::Eq, Src::K(Event::SKIP_NR as u32), true, pass)
-            }
-            Arch::X32 => b.emit_jump(JmpOp::Ge, Src::K(Self::X32_SYSCALL_BIT), false, end),
-            _ => Ok(()),
-        }
-    }
-
-    /// Emits the dispatch chain of one architecture, entered with `A` holding
+    /// Emits the dispatch of one architecture, entered with `A` holding
     /// `seccomp_data.nr` and falling through when no rule of `arch` matches the event.
     fn emit_arch(&self, b: &mut Builder, arch: Arch) -> Result<(), CompileError>
         ensures old(b).rev@.len() <= final(b).rev@.len()
     {
-        // TODO: implement.
-        assume(false);
-        todo!()
+        // One test per rule, in the policy's order. Only the last of them falls through
+        // to the block's default return, so every earlier one has to hand `A` back.
+        let mut a_live = false;
+        let mut i = self.rules.len();
+        while i > 0
+            invariant
+                i <= self.rules@.len(),
+                old(b).rev@.len() <= b.rev@.len(),
+            decreases i
+        {
+            i -= 1;
+            // x86 reaches some rules a second time through the socketcall or ipc
+            // multiplexer, which answers to a number of its own.
+            if let Some(nr) = self.rules[i].mux_nr(arch) {
+                self.rules[i].emit(b, arch, nr, a_live)?;
+                a_live = true;
+            }
+            if let Some(nr) = self.rules[i].syscall.nr(arch) {
+                self.rules[i].emit(b, arch, nr, a_live)?;
+                a_live = true;
+            }
+        }
+        Ok(())
     }
 }
 
