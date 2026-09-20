@@ -258,7 +258,7 @@ impl Builder {
             #[trigger] Self::goes_to_all(rev, data, rev.len(), (rev.len() - 1) as nat, Self::word(data, k))
     {
         assert forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE implies
-            Self::goes_to_all(rev, data, rev.len(), (rev.len() - 1) as nat, Self::word(data, k)) by {
+            #[trigger] Self::goes_to_all(rev, data, rev.len(), (rev.len() - 1) as nat, Self::word(data, k)) by {
             assert forall |a: u32| #[trigger] Self::goes_to(rev, data, rev.len(), a,
                 (rev.len() - 1) as nat, Self::word(data, k)) by {
                 assert forall |ext: Seq<Instr>| Self::extends(rev, ext) implies

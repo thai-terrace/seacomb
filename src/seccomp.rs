@@ -8,7 +8,7 @@ verus! {
 
 #[verifier::external_type_specification]
 #[allow(dead_code)]
-struct ExSockFilter(libc::sock_filter);
+pub struct ExSockFilter(libc::sock_filter);
 
 pub enum InstallError {
     Compile(CompileError),
