@@ -7,6 +7,7 @@ use super::cbpf::Outcome;
 verus! {
 
 /// Architecture tokens `SCMP_ARCH_*` (excluding `SCMP_ARCH_NATIVE`).
+#[derive(Clone, Copy, PartialEq, Eq, Structural)]
 pub enum Arch { X86, X86_64, X32, Arm, Aarch64 }
 
 /// Filter actions (`SCMP_ACT_*`).
