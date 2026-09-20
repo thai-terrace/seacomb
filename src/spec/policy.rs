@@ -67,6 +67,7 @@ pub struct Attrs {
     pub api_tskip: bool,
     pub ctl_log: bool,
     pub ctl_ssb: bool,
+    /// No effect on semantics but affects final codegen.
     pub ctl_optimize: Optimize,
     pub api_sysrawrc: bool,
     pub ctl_waitkill: bool,
@@ -76,6 +77,7 @@ pub struct Attrs {
 pub struct Policy {
     pub attrs: Attrs,
     pub archs: Vec<Arch>,
+    /// No effect on semantics but affects final codegen.
     pub priorities: Vec<Priority>,
     pub rules: Vec<Rule>,
 }

@@ -23,11 +23,16 @@ pub enum Src { K(u32), X }
 /// Return value (`BPF_RVAL`): `BPF_K`, `BPF_A`.
 pub enum RetVal { K(u32), A }
 
-/// ALU operator allowed by seccomp.
-pub enum AluOp { Add, Sub, Mul, Div, Or, And, Lsh, Rsh, Xor }
+/// ALU operator allowed by seccomp, numbered by its `BPF_OP` bits.
+#[derive(Clone, Copy)]
+pub enum AluOp {
+    Add = 0x00, Sub = 0x10, Mul = 0x20, Div = 0x30, Or = 0x40,
+    And = 0x50, Lsh = 0x60, Rsh = 0x70, Xor = 0xa0,
+}
 
 /// Comparison of a conditional jump (`BPF_OP` of class `BPF_JMP`, except `BPF_JA`); unsigned.
-pub enum JmpOp { Eq, Gt, Ge, Set }
+#[derive(Clone, Copy)]
+pub enum JmpOp { Eq = 0x10, Gt = 0x20, Ge = 0x30, Set = 0x40 }
 
 /// `struct sock_filter`, restricted to the codes accepted by `seccomp_check_filter()`:
 /// <https://github.com/torvalds/linux/blob/40288c9206c17eb66a603262e06a58d300d0f279/kernel/seccomp.c#L286-L343>
