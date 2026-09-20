@@ -1,0 +1,13 @@
+# An armv7l guest, which covers Arch::Arm.
+#
+# Ubuntu rather than Debian, which publishes no armhf cloud image.
+
+base:
+- common.yaml
+- template:_images/ubuntu-24.04
+
+arch: armv7l
+
+# No host runs this one natively, so keep the emulated guest small.
+cpus: 2
+memory: "2GiB"

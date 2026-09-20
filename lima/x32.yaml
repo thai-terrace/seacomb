@@ -1,0 +1,32 @@
+# A Debian guest, which covers Arch::X32.
+#
+# Ubuntu builds its kernel without CONFIG_X86_X32_ABI at all, and Debian builds
+# it with CONFIG_X86_X32_DISABLED, so the ABI only appears once `syscall.x32=1`
+# reaches the kernel command line, which the guest reboots itself to pick up.
+
+base:
+- common.yaml
+- template:_images/debian-13
+
+arch: x86_64
+
+provision:
+# The x32 libraries the gnux32 target links against.
+- mode: system
+  script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y gcc-multilib libc6-dev-x32
+    "${CARGO_HOME}/bin/rustup" target add x86_64-unknown-linux-gnux32
+# The kernel command line that turns the x32 ABI on, and the reboot onto it.
+- mode: system
+  script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    if grep -q "syscall.x32=1" /proc/cmdline; then exit 0; fi
+    if ! grep -q "syscall.x32=1" /etc/default/grub; then
+      echo 'GRUB_CMDLINE_LINUX="${GRUB_CMDLINE_LINUX} syscall.x32=1"' >>/etc/default/grub
+      update-grub
+    fi
+    systemctl reboot

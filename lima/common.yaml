@@ -1,0 +1,57 @@
+# Settings every seacomb test VM shares.
+
+# The tests read the checkout through this mount, so it must not serve a cached
+# copy of what the host just changed.
+mounts:
+- location: "~"
+  9p:
+    cache: "none"
+
+cpus: 4
+memory: "4GiB"
+disk: "20GiB"
+
+# Nothing here runs containers, and the guest agent download is slow to emulate.
+containerd:
+  system: false
+  user: false
+
+env:
+  # Rustup lives outside the home, so a non-login `limactl shell` still finds it.
+  RUSTUP_HOME: /usr/local/rustup
+  CARGO_HOME: /usr/local/cargo
+  # The host home is mounted read-only, so cargo writes its artifacts to the guest disk.
+  CARGO_TARGET_DIR: /var/tmp/seacomb-target
+
+provision:
+# The C toolchain cargo links test binaries with.
+- mode: system
+  script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y build-essential curl
+# Rustup, symlinked into a directory that is already on PATH.
+- mode: system
+  script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    if [ ! -x "${CARGO_HOME}/bin/cargo" ]; then
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+        sh -s -- -y --no-modify-path --profile minimal
+    fi
+    chmod -R a+rX "${RUSTUP_HOME}"
+    chmod -R a+rwX "${CARGO_HOME}"
+    ln -sf "${CARGO_HOME}"/bin/* /usr/local/bin/
+
+probes:
+- description: "cargo to be installed"
+  script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    if ! timeout 300s bash -c "until command -v cargo >/dev/null 2>&1; do sleep 3; done"; then
+      echo >&2 "cargo is not installed yet"
+      exit 1
+    fi
+  hint: "See /var/log/cloud-init-output.log in the guest."

@@ -325,6 +325,7 @@ mod tests {
     }
 
     /// An argument test on a 64-bit architecture looks at both words of the argument.
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn errno_on_high_word_of_argument() {
         let policy = Policy::allow_except(vec![
