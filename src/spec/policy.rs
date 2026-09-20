@@ -67,7 +67,6 @@ pub struct Attrs {
     pub api_tskip: bool,
     pub ctl_log: bool,
     pub ctl_ssb: bool,
-    /// No effect on semantics but affects final codegen.
     pub ctl_optimize: Optimize,
     pub api_sysrawrc: bool,
     pub ctl_waitkill: bool,
@@ -336,9 +335,10 @@ impl Policy {
     pub open spec fn is_active_arch(self, arch: Arch, ev: Event) -> bool {
         &&& self.archs@.contains(arch)
         &&& ev.matches_arch(arch)
-        // Some special cases when the policy supports both X86_64 and X32.
-        &&& arch == Arch::X86_64 ==> !ev.x32_bit() || ev.is_skip() || self.archs@.contains(Arch::X32)
-        &&& arch == Arch::X32 ==> ev.x32_bit() || self.archs@.contains(Arch::X86_64)
+        // Only x32 claims the skip pseudo-syscall when the policy covers both, since its
+        // rule costs fewer chain nodes and so outranks x86_64's in `db_rule_add`.
+        &&& arch == Arch::X86_64 ==> !ev.x32_bit() || (ev.is_skip() && !self.archs@.contains(Arch::X32))
+        &&& arch == Arch::X32 ==> ev.x32_bit()
     }
 
     /// Defines whether evaluating the policy on event `ev`

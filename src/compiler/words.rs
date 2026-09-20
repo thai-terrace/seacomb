@@ -1,0 +1,120 @@
+//! The 32-bit words a filter compares, and the `seccomp_data` image they come from.
+
+use vstd::prelude::*;
+#[allow(unused_imports)]
+use crate::spec::{policy::*, cbpf::*};
+#[allow(unused_imports)]
+use super::builder::Builder;
+
+verus! {
+
+impl Policy {
+    /// Byte offset of `seccomp_data.nr`.
+    pub(super) const OFFSET_EVENT_NR: u32 = 0;
+
+    /// Byte offset of `seccomp_data.arch`.
+    pub(super) const OFFSET_EVENT_ARCH: u32 = 4;
+
+    /// Byte offset of the low half of `seccomp_data.args[0]`.
+    pub(super) const OFFSET_EVENT_ARGS: u32 = 16;
+}
+
+impl Event {
+    /// The event the 64-byte image `data` describes.
+    pub(super) open spec fn of(data: &[u8]) -> Event {
+        Event::parse(data)->Some_0
+    }
+
+    /// A 64-byte image parses, and the filter's loads read back what the parser wrote.
+    pub(super) proof fn lemma_image(data: &[u8])
+        requires data@.len() == Program::SECCOMP_DATA_SIZE
+        ensures
+            Event::parse(data) is Some,
+            Self::of(data).args.len() == Rule::ARG_COUNT_MAX,
+            Builder::word(data, Policy::OFFSET_EVENT_NR) == Self::of(data).nr as u32,
+            Builder::word(data, Policy::OFFSET_EVENT_ARCH) == Self::of(data).arch,
+            forall |k: u32| k < Rule::ARG_COUNT_MAX ==>
+                #[trigger] Builder::word(data, (Policy::OFFSET_EVENT_ARGS + 8 * k) as u32)
+                    == (Self::of(data).args[k as int] & 0xFFFF_FFFF) as u32,
+            forall |k: u32| k < Rule::ARG_COUNT_MAX ==>
+                #[trigger] Builder::word(data, (Policy::OFFSET_EVENT_ARGS + 8 * k + 4) as u32)
+                    == (Self::of(data).args[k as int] >> 32) as u32,
+    {
+        let ev = Self::of(data);
+        // `nr` is the word at offset 0, put through the `i32` round trip `parse` writes.
+        let w = Builder::word(data, Policy::OFFSET_EVENT_NR);
+        assert((w as i32) as u32 == w) by (bit_vector);
+        // Each argument spans two words: the low one at `16 + 8 * k`, the high one four on.
+        assert forall |k: u32|
+            #![trigger Builder::word(data, (Policy::OFFSET_EVENT_ARGS + 8 * k) as u32)]
+            #![trigger Builder::word(data, (Policy::OFFSET_EVENT_ARGS + 8 * k + 4) as u32)]
+            k < Rule::ARG_COUNT_MAX implies
+            Builder::word(data, (Policy::OFFSET_EVENT_ARGS + 8 * k) as u32)
+                == (ev.args[k as int] & 0xFFFF_FFFF) as u32
+            && Builder::word(data, (Policy::OFFSET_EVENT_ARGS + 8 * k + 4) as u32)
+                == (ev.args[k as int] >> 32) as u32
+        by {
+            let i = Policy::OFFSET_EVENT_ARGS + 8 * (k as int);
+            let c0 = data@[i];
+            let c1 = data@[i + 1];
+            let c2 = data@[i + 2];
+            let c3 = data@[i + 3];
+            let c4 = data@[i + 4];
+            let c5 = data@[i + 5];
+            let c6 = data@[i + 6];
+            let c7 = data@[i + 7];
+            assert((((c0 as u64) | ((c1 as u64) << 8) | ((c2 as u64) << 16) | ((c3 as u64) << 24)
+                | ((c4 as u64) << 32) | ((c5 as u64) << 40) | ((c6 as u64) << 48)
+                | ((c7 as u64) << 56)) & 0xFFFF_FFFF) as u32
+                == (c0 as u32) | ((c1 as u32) << 8) | ((c2 as u32) << 16) | ((c3 as u32) << 24))
+                by (bit_vector);
+            assert((((c0 as u64) | ((c1 as u64) << 8) | ((c2 as u64) << 16) | ((c3 as u64) << 24)
+                | ((c4 as u64) << 32) | ((c5 as u64) << 40) | ((c6 as u64) << 48)
+                | ((c7 as u64) << 56)) >> 32) as u32
+                == (c4 as u32) | ((c5 as u32) << 8) | ((c6 as u32) << 16) | ((c7 as u32) << 24))
+                by (bit_vector);
+        }
+    }
+
+    /// The x32 bit and the skip pseudo-syscall, as the filter's unsigned comparisons
+    /// of `seccomp_data.nr` see them.
+    pub(super) proof fn lemma_nr(self)
+        ensures
+            self.x32_bit() <==> self.nr as u32 >= 0x4000_0000,
+            self.is_skip() <==> self.nr as u32 == Event::SKIP_NR as u32,
+            forall |nr: i32| #[trigger] (nr as u32) == self.nr as u32 ==> nr == self.nr,
+    {
+        let m = self.nr;
+        assert((m < 0 || m >= 0x4000_0000) <==> m as u32 >= 0x4000_0000) by (bit_vector);
+        assert((m == -1) <==> m as u32 == 0xFFFF_FFFFu32) by (bit_vector);
+        assert forall |nr: i32| #[trigger] (nr as u32) == m as u32 implies nr == m by {
+            assert((nr as u32) == (m as u32) ==> nr == m) by (bit_vector);
+        }
+    }
+}
+
+impl ArgCmp {
+    /// A 64-bit value seen as two 32-bit words: comparisons settle on the high word
+    /// unless the two are equal, and a mask applies to each word on its own.
+    pub(super) proof fn lemma_words(x: u64, y: u64)
+        ensures
+            x & u64::MAX == x,
+            x & 0xFFFF_FFFF == (x as u32) as u64,
+            (x == y) <==> (((x >> 32) as u32) == ((y >> 32) as u32) && (x as u32) == (y as u32)),
+            (x < y) <==> (((x >> 32) as u32) < ((y >> 32) as u32)
+                || (((x >> 32) as u32) == ((y >> 32) as u32) && (x as u32) < (y as u32))),
+            ((x & y) as u32) == ((x as u32) & (y as u32)),
+            (((x & y) >> 32) as u32) == (((x >> 32) as u32) & ((y >> 32) as u32)),
+    {
+        assert(x & u64::MAX == x) by (bit_vector);
+        assert(x & 0xFFFF_FFFF == (x as u32) as u64) by (bit_vector);
+        assert(((x & y) as u32) == ((x as u32) & (y as u32))) by (bit_vector);
+        assert((((x & y) >> 32) as u32) == (((x >> 32) as u32) & ((y >> 32) as u32))) by (bit_vector);
+        assert((x == y) <==> (((x >> 32) as u32) == ((y >> 32) as u32) && (x as u32) == (y as u32)))
+            by (bit_vector);
+        assert((x < y) <==> (((x >> 32) as u32) < ((y >> 32) as u32)
+            || (((x >> 32) as u32) == ((y >> 32) as u32) && (x as u32) < (y as u32)))) by (bit_vector);
+    }
+}
+
+} // verus!

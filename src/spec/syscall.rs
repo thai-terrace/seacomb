@@ -21,7 +21,8 @@ macro_rules! syscalls {
 
             impl $name {
                 #[allow(unreachable_patterns)]
-                pub closed spec fn spec_nr(&self, arch: super::policy::Arch) -> Option<i32> {
+                #[verifier::opaque]
+                pub open spec fn spec_nr(&self, arch: super::policy::Arch) -> Option<i32> {
                     use super::policy::*;
                     match self {
                         $(
@@ -40,6 +41,7 @@ macro_rules! syscalls {
                     ensures res == self.spec_nr(arch)
                 {
                     use super::policy::*;
+                    reveal($name::spec_nr);
                     match self {
                         $(
                             $name::$variant => match arch {
