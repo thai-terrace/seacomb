@@ -17,6 +17,17 @@ impl Syscall {
         reveal(Syscall::spec_nr);
     }
 
+    /// The x86_64 and x32 syscall-number ranges overlap only at skip.
+    pub(super) proof fn lemma_nr_ranges(self)
+        ensures
+            self.spec_nr(Arch::X86_64) matches Some(nr) ==> -1 <= nr < 0x4000_0000,
+            self.spec_nr(Arch::X32) matches Some(nr) ==> nr == -1 || nr >= 0x4000_0000,
+            (self.spec_nr(Arch::X86_64) == Some(-1i32)) <==> self == Self::Skip,
+            forall |arch: Arch| #[trigger] Self::Skip.spec_nr(arch) == Some(-1i32),
+    {
+        reveal(Syscall::spec_nr);
+    }
+
     /// Every x32 syscall number passes the x32 guard.
     pub(super) proof fn lemma_x32_nr(self)
         ensures self.spec_nr(Arch::X32) matches Some(nr) ==> nr < 0 || nr >= 0x4000_0000
@@ -76,9 +87,14 @@ impl Rule {
         assert(forall |x: u64| #[trigger] (x & 0xFFFF_FFFF) < 0x1_0000_0000) by (bit_vector);
     }
 
+    /// Whether this ABI emits the rule's direct tests in the shared block.
+    pub(super) open spec fn direct_enabled(self, arch: Arch, has_x32: bool) -> bool {
+        !(arch == Arch::X86_64 && has_x32 && self.syscall == Syscall::Skip)
+    }
+
     /// Whether the rule matches either ABI served by this architecture block.
     pub(super) open spec fn group_matches(self, arch: Arch, has_x32: bool, ev: Event) -> bool {
-        self.eval(arch, ev)
+        (self.direct_enabled(arch, has_x32) && self.eval(arch, ev))
             || (arch == Arch::X86_64 && has_x32 && self.eval(Arch::X32, ev))
     }
 
@@ -188,7 +204,11 @@ impl Policy {
             let arch = self.archs@[i];
             let act = self.dispatch(arch, ev, 8, self.rules@.len() as int);
             assert(self.archs@.contains(arch));
-            assert(self.is_active_arch(arch, ev));
+            Syscall::Skip.lemma_nr_ranges();
+            let active = if arch == Arch::X86_64 && ev.nr == -1 && self.archs@.contains(Arch::X32) {
+                Arch::X32
+            } else { arch };
+            assert(self.is_active_arch(active, ev));
             self.lemma_dispatch(arch, ev, 8, self.rules@.len() as int);
             assert forall |j: int| 0 <= j < self.rules@.len() implies
                 self.included(j, 8, self.rules@.len() as int) by {
@@ -197,18 +217,37 @@ impl Policy {
             if exists |j: int| 0 <= j < self.rules@.len()
                 && #[trigger] self.rules@[j].group_matches(arch, self.archs@.contains(Arch::X32), ev)
                 && self.rules@[j].action == act {
-                let j = choose |j: int| 0 <= j < self.rules@.len()
-                    && #[trigger] self.rules@[j].group_matches(arch, self.archs@.contains(Arch::X32), ev)
-                    && self.rules@[j].action == act;
-                let a = if self.rules@[j].eval(arch, ev) { arch } else { Arch::X32 };
+                let j = choose |j: int| {
+                    &&& self.included(j, 8, self.rules@.len() as int)
+                    &&& #[trigger] self.rules@[j].group_matches(arch, self.archs@.contains(Arch::X32), ev)
+                    &&& self.rules@[j].action == act
+                    &&& forall |k: int| self.included(k, 8, self.rules@.len() as int)
+                        && #[trigger] self.rules@[k].group_matches(arch, self.archs@.contains(Arch::X32), ev) ==> {
+                            &&& self.rules@[k].action.precedence() <= self.rules@[j].action.precedence()
+                            &&& self.rules@[k].action.precedence() == self.rules@[j].action.precedence() ==> k <= j
+                        }
+                };
+                let a = if self.rules@[j].direct_enabled(arch, self.archs@.contains(Arch::X32))
+                    && self.rules@[j].eval(arch, ev) { arch } else { Arch::X32 };
+                self.rules@[j].syscall.lemma_nr_ranges();
                 self.rules@[j].lemma_x32(ev);
                 assert(self.is_active_arch(a, ev));
                 assert(self.rules@[j].eval(a, ev));
+                assert forall |k: int| #![trigger self.rules@[k]]
+                    0 <= k < self.rules@.len() && k != j && self.rules@[k].eval(a, ev) implies {
+                        ||| self.rules@[k].action.precedence() < act.precedence()
+                        ||| k < j && self.rules@[k].action.precedence() == act.precedence()
+                    } by {
+                    self.rules@[k].syscall.lemma_nr_ranges();
+                    assert(self.rules@[k].group_matches(arch, self.archs@.contains(Arch::X32), ev));
+                    assert(self.included(k, 8, self.rules@.len() as int));
+                }
                 assert(self.eval(ev, act));
             } else {
                 assert forall |a: Arch, j: int| self.is_active_arch(a, ev)
                     && 0 <= j < self.rules@.len()
                     implies !#[trigger] self.rules@[j].eval(a, ev) by {
+                    self.rules@[j].syscall.lemma_nr_ranges();
                     assert(self.block_arch(a) == arch);
                     assert(!self.rules@[j].group_matches(arch, self.archs@.contains(Arch::X32), ev));
                 }
@@ -216,6 +255,93 @@ impl Policy {
             }
         } else {
             self.lemma_blocks(ev, i + 1);
+        }
+    }
+
+    /// Matching rules for one event use the same active architecture.
+    pub(super) proof fn lemma_matching_arch_unique(self, ev: Event, a: Arch, b: Arch, i: int, j: int)
+        requires
+            self.is_active_arch(a, ev), self.is_active_arch(b, ev),
+            0 <= i < self.rules@.len(), 0 <= j < self.rules@.len(),
+            self.rules@[i].eval(a, ev), self.rules@[j].eval(b, ev),
+        ensures a == b
+    {
+        if a != b {
+            self.rules@[i].syscall.lemma_nr_ranges();
+            self.rules@[j].syscall.lemma_nr_ranges();
+            assert(a == Arch::X86_64 || a == Arch::X32);
+            assert(b == Arch::X86_64 || b == Arch::X32);
+            assert(ev.nr == -1);
+            assert(false);
+        }
+    }
+
+    /// Whether this rule is the ordered match selected for the event.
+    pub(super) open spec fn wins(self, ev: Event, a: Arch, i: int) -> bool {
+        &&& self.is_active_arch(a, ev)
+        &&& 0 <= i < self.rules@.len()
+        &&& self.rules@[i].eval(a, ev)
+        &&& forall |j: int| #![trigger self.rules@[j]]
+            0 <= j < self.rules@.len() && j != i && self.rules@[j].eval(a, ev) ==> {
+                ||| self.rules@[j].action.precedence() < self.rules@[i].action.precedence()
+                ||| j < i && self.rules@[j].action.precedence() == self.rules@[i].action.precedence()
+            }
+    }
+
+    /// An accepted action has a winning rule whenever any active rule matches.
+    pub(super) proof fn lemma_eval_witness(self, ev: Event, act: Action, a: Arch, i: int)
+        requires
+            self.wf(), self.eval(ev, act),
+            self.is_active_arch(a, ev), 0 <= i < self.rules@.len(), self.rules@[i].eval(a, ev),
+        ensures exists |b: Arch, j: int| #[trigger] self.wins(ev, b, j) && self.rules@[j].action == act
+    {
+        let (b, j) = choose |b: Arch, j: int| {
+            &&& self.is_active_arch(b, ev)
+            &&& 0 <= j < self.rules@.len()
+            &&& #[trigger] self.rules@[j].eval(b, ev)
+            &&& self.rules@[j].action == act
+            &&& forall |k: int| #![trigger self.rules@[k]]
+                0 <= k < self.rules@.len() && k != j && self.rules@[k].eval(b, ev) ==> {
+                    ||| self.rules@[k].action.precedence() < act.precedence()
+                    ||| k < j && self.rules@[k].action.precedence() == act.precedence()
+                }
+        };
+        assert(self.wins(ev, b, j));
+    }
+
+    /// An accepted action comes from a winning rule or an applicable fallback.
+    pub(super) proof fn lemma_eval_cases(self, ev: Event, act: Action)
+        requires self.wf(), self.eval(ev, act)
+        ensures
+            (exists |a: Arch, i: int| #[trigger] self.wins(ev, a, i) && self.rules@[i].action == act)
+            || (act == self.attrs.act_badarch && forall |a: Arch| !self.is_active_arch(a, ev))
+            || (act == self.attrs.act_default && exists |a: Arch| self.is_active_arch(a, ev)),
+    {
+        if exists |a: Arch, i: int| self.is_active_arch(a, ev)
+            && 0 <= i < self.rules@.len() && #[trigger] self.rules@[i].eval(a, ev) {
+            let (a, i) = choose |a: Arch, i: int| self.is_active_arch(a, ev)
+                && 0 <= i < self.rules@.len() && #[trigger] self.rules@[i].eval(a, ev);
+            self.lemma_eval_witness(ev, act, a, i);
+        }
+    }
+
+    /// Two accepted actions for an event are equal.
+    pub(super) proof fn lemma_eval_unique(self, ev: Event, act1: Action, act2: Action)
+        requires self.wf(), self.eval(ev, act1), self.eval(ev, act2)
+        ensures act1 == act2
+    {
+        self.lemma_eval_cases(ev, act1);
+        self.lemma_eval_cases(ev, act2);
+        if exists |a: Arch, i: int| #[trigger] self.wins(ev, a, i) && self.rules@[i].action == act1 {
+            let (a, i) = choose |a: Arch, i: int| #[trigger] self.wins(ev, a, i) && self.rules@[i].action == act1;
+            self.lemma_eval_witness(ev, act2, a, i);
+            let (b, j) = choose |b: Arch, j: int| #[trigger] self.wins(ev, b, j) && self.rules@[j].action == act2;
+            self.lemma_matching_arch_unique(ev, a, b, i, j);
+            assert(i == j);
+        } else if exists |b: Arch, j: int| #[trigger] self.wins(ev, b, j) && self.rules@[j].action == act2 {
+            let (b, j) = choose |b: Arch, j: int| #[trigger] self.wins(ev, b, j) && self.rules@[j].action == act2;
+            self.lemma_eval_witness(ev, act1, b, j);
+            assert(false);
         }
     }
 }

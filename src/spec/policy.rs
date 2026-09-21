@@ -307,6 +307,9 @@ impl Policy {
         &&& self.archs@.contains(arch)
         &&& ev.matches_arch(arch)
         &&& arch == Arch::X32 ==> ev.x32_bit()
+        // To avoid an ambiguity where having skip rules in both x86_64 and x32
+        // would potentially allow eval to accept two different actions.
+        &&& Some(ev.nr) == Syscall::Skip.nr(arch) && arch == Arch::X86_64 ==> !self.archs@.contains(Arch::X32)
     }
 
     /// Defines whether evaluating the policy on event `ev`
@@ -322,25 +325,24 @@ impl Policy {
             &&& 0 <= i < self.rules@.len()
             &&& #[trigger] self.rules@[i].eval(a, ev)
             &&& self.rules@[i].action == act
-            // // A disambiguation rule following kernel's behavior:
-            // // 1. Higher precedence actions win.
-            // // 2. If two actions have the same precedence (e.g. `Errno(1)` and `Errno(2)`),
-            // //    the rule that was added last wins.
-            // //
-            // // In particular, this should imply that if we install two policies consecutively:
-            // // ```
-            // // policy1.install();
-            // // policy2.install();
-            // // ```
-            // // then the resulting behavior is equivalent to installing `policy1 + policy2` once.
-            // // (assuming other equal flags).
-            // &&& forall |j: int| #![trigger self.rules@[j]]
-            //         0 <= j < self.rules@.len() && j != i
-            //         ==> {
-            //             ||| !self.rules@[j].eval(a, ev)
-            //             ||| self.rules@[j].action.precedence() < act.precedence()
-            //             ||| j < i
-            //         }
+            // A disambiguation rule following kernel's behavior:
+            // 1. Higher precedence actions win.
+            // 2. If two actions have the same precedence (e.g. `Errno(1)` and `Errno(2)`),
+            //    the rule that was added last wins.
+            //
+            // In particular, this should imply that if we install two policies consecutively:
+            // ```
+            // policy1.install();
+            // policy2.install();
+            // ```
+            // then the resulting behavior is equivalent to installing `policy1 + policy2` once.
+            // (assuming other equal flags).
+            &&& forall |j: int| #![trigger self.rules@[j]]
+                    0 <= j < self.rules@.len() && j != i && self.rules@[j].eval(a, ev)
+                    ==> {
+                        ||| self.rules@[j].action.precedence() < act.precedence()
+                        ||| j < i && self.rules@[j].action.precedence() == act.precedence()
+                    }
         }
         // Take the default action when no rule matches on any active arch.
         ||| {

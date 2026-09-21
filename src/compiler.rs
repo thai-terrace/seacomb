@@ -22,6 +22,36 @@ pub enum CompileError {
 }
 
 impl Policy {
+    /// Whether this policy accepts an action for the event.
+    pub closed spec fn eval_defined(self, ev: Event) -> bool {
+        exists |act: Action| self.eval(ev, act)
+    }
+
+    /// Every event has an action accepted by a well-formed policy.
+    pub proof fn theorem_eval_total(self)
+        requires self.wf()
+        ensures forall |ev: Event| #[trigger] self.eval_defined(ev)
+    {
+        assert forall |ev: Event| #[trigger] self.eval_defined(ev) by {
+            self.lemma_blocks(ev, 0);
+            assert(self.eval(ev, self.blocks(ev, 0)));
+        }
+    }
+
+    /// Although defined as a relation, the evaluation of a policy is a function of the event.
+    pub proof fn theorem_eval_functional(self)
+        requires self.wf()
+        ensures
+            forall |ev: Event, act1: Action, act2: Action| self.eval(ev, act1) && self.eval(ev, act2) ==> act1 == act2,
+            forall |ev: Event| #[trigger] self.eval_defined(ev),
+    {
+        self.theorem_eval_total();
+        assert forall |ev: Event, act1: Action, act2: Action|
+            self.eval(ev, act1) && self.eval(ev, act2) implies act1 == act2 by {
+            self.lemma_eval_unique(ev, act1, act2);
+        }
+    }
+
     /// Compiles the policy into a filter program.
     pub fn to_cbpf(&self) -> (res: Result<Program, CompileError>)
         requires self.wf()

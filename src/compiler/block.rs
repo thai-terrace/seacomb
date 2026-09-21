@@ -282,7 +282,14 @@ impl Policy {
                         self.rules[i].emit_tests(b, Arch::X32)?;
                     }
                     let ghost x32 = b.rev@;
-                    self.rules[i].emit_tests(b, arch)?;
+                    // Skip is evaluated only with x32 arguments when both ABIs are enabled.
+                    let direct = match &self.rules[i].syscall {
+                        Syscall::Skip => arch != Arch::X86_64 || !has_x32,
+                        _ => true,
+                    };
+                    if direct {
+                        self.rules[i].emit_tests(b, arch)?;
+                    }
                     proof {
                         assert forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE implies
                             #[trigger] Builder::returns(b.rev@, data, b.rev@.len(), Event::of(data).nr as u32,
@@ -290,7 +297,7 @@ impl Policy {
                             let ev = Event::of(data);
                             let nr = ev.nr as u32;
                             let want = self.dispatch(arch, ev, priority as int, i + 1).to_ret();
-                            if !rule.eval(arch, ev) {
+                            if !direct || !rule.eval(arch, ev) {
                                 assert(Builder::goes_to(b.rev@, data, b.rev@.len(), nr, x32.len(), nr));
                                 if arch == Arch::X86_64 && has_x32 && rule.eval(Arch::X32, ev) {
                                     assert(Builder::returns(x32, data, x32.len(), nr, rule.action.to_ret()));
