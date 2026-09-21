@@ -6,9 +6,9 @@ use crate::compiler::CompileError;
 
 verus! {
 
-/// An error while creating or updating a filter.
+/// An error while creating, updating, compiling, or installing a filter.
 #[derive(Debug)]
-pub enum FilterError {
+pub enum Error {
     /// An action contains an invalid value.
     BadAction,
     /// A rule has the same action as the filter's default.
@@ -21,11 +21,17 @@ pub enum FilterError {
     DuplicateArch,
     /// The native architecture is not supported.
     UnsupportedArch,
+    /// The policy could not be compiled into a filter program.
+    Compile(CompileError),
+    /// Setting `no_new_privs` failed with this errno.
+    NoNewPrivs(i32),
+    /// Installing the seccomp filter failed with this errno.
+    SetModeFilter(i32),
 }
 
 impl Arch {
     /// Returns the architecture this binary runs on, or an error if it is unsupported.
-    pub fn native() -> Result<Arch, FilterError> {
+    pub fn native() -> Result<Arch, Error> {
         if cfg!(all(target_arch = "x86_64", target_pointer_width = "32")) {
             Ok(Arch::X32)
         } else if cfg!(target_arch = "x86_64") {
@@ -37,7 +43,7 @@ impl Arch {
         } else if cfg!(target_arch = "arm") {
             Ok(Arch::Arm)
         } else {
-            Err(FilterError::UnsupportedArch)
+            Err(Error::UnsupportedArch)
         }
     }
 }
@@ -95,13 +101,13 @@ impl ArgCmp {
 
 impl Action {
     /// Checks whether this action contains a valid value.
-    pub fn check(&self) -> (res: Result<(), FilterError>)
+    pub fn check(&self) -> (res: Result<(), Error>)
         ensures
             (res is Ok) == self.wf(),
             res matches Err(err) ==> err is BadAction,
     {
         match self {
-            Action::Errno(e) if (*e as u32) >= Self::MAX_ERRNO => Err(FilterError::BadAction),
+            Action::Errno(e) if (*e as u32) >= Self::MAX_ERRNO => Err(Error::BadAction),
             _ => Ok(()),
         }
     }
@@ -109,7 +115,7 @@ impl Action {
 
 impl Rule {
     /// Checks whether this rule is valid for the given filter attributes.
-    pub fn check(&self, attrs: &Attrs) -> (res: Result<(), FilterError>)
+    pub fn check(&self, attrs: &Attrs) -> (res: Result<(), Error>)
         ensures (res is Ok) == self.wf(*attrs)
     {
         self.action.check()?;
@@ -118,10 +124,10 @@ impl Rule {
             attrs.act_default.lemma_to_ret();
         }
         if self.action.to_ret() == attrs.act_default.to_ret() {
-            return Err(FilterError::ActionIsDefault);
+            return Err(Error::ActionIsDefault);
         }
         match self.syscall {
-            Syscall::Skip if !attrs.api_tskip => return Err(FilterError::SkipNotEnabled),
+            Syscall::Skip if !attrs.api_tskip => return Err(Error::SkipNotEnabled),
             _ => {},
         }
         let mut i: usize = 0;
@@ -136,7 +142,7 @@ impl Rule {
             decreases self.conds@.len() - i
         {
             if self.conds[i].arg >= Self::ARG_COUNT_MAX {
-                return Err(FilterError::ArgumentOutOfRange(self.conds[i].arg));
+                return Err(Error::ArgumentOutOfRange(self.conds[i].arg));
             }
             i += 1;
         }
@@ -161,7 +167,7 @@ impl Filter {
     }
 
     /// Creates a filter with default action `act_default` and no architectures enabled.
-    pub fn new(act_default: Action) -> (res: Result<Filter, FilterError>)
+    pub fn new(act_default: Action) -> (res: Result<Filter, Error>)
         ensures res matches Ok(f) ==> {
             &&& f.wf()
             &&& f.policy().attrs.act_default == act_default
@@ -179,7 +185,7 @@ impl Filter {
     }
 
     /// Creates a filter over the running architecture with default action `act_default`.
-    pub fn new_native(act_default: Action) -> (res: Result<Filter, FilterError>)
+    pub fn new_native(act_default: Action) -> (res: Result<Filter, Error>)
         ensures res matches Ok(f) ==> {
             &&& f.wf()
             &&& f.policy().attrs.act_default == act_default
@@ -192,7 +198,7 @@ impl Filter {
     }
 
     /// Adds `arch` to the architectures covered by this filter's rules.
-    pub fn add_arch(&mut self, arch: Arch) -> (res: Result<(), FilterError>)
+    pub fn add_arch(&mut self, arch: Arch) -> (res: Result<(), Error>)
         requires old(self).wf()
         ensures
             final(self).wf(),
@@ -209,7 +215,7 @@ impl Filter {
             decreases self.policy.archs@.len() - i
         {
             if self.policy.archs[i] == arch {
-                return Err(FilterError::DuplicateArch);
+                return Err(Error::DuplicateArch);
             }
             i += 1;
         }
@@ -231,7 +237,7 @@ impl Filter {
 
     /// Applies `action` to `syscall` when every argument test in `conds` holds.
     pub fn add_rule(&mut self, action: Action, syscall: SyscallName, conds: Vec<ArgCmp>)
-        -> (res: Result<(), FilterError>)
+        -> (res: Result<(), Error>)
         requires old(self).wf()
         ensures
             final(self).wf(),
@@ -256,7 +262,7 @@ impl Filter {
     }
 
     /// Sets the action for syscalls from architectures this filter does not cover.
-    pub fn on_badarch(&mut self, act_badarch: Action) -> (res: Result<(), FilterError>)
+    pub fn on_badarch(&mut self, act_badarch: Action) -> (res: Result<(), Error>)
         requires old(self).wf()
         ensures
             final(self).wf(),
@@ -291,10 +297,87 @@ impl Filter {
 
     /// Compiles this filter and installs it on the calling thread.
     #[cfg(target_os = "linux")]
-    pub fn install(&self) -> Result<(), crate::seccomp::InstallError>
+    pub fn install(&self) -> Result<(), Error>
         requires self.wf()
     {
-        self.policy.install()
+        match self.to_cbpf() {
+            Ok(prog) => prog.install(&self.policy.attrs),
+            Err(err) => Err(Error::Compile(err)),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Error {
+    /// The errno the last failing libc call left behind.
+    #[verifier::external_body]
+    fn errno() -> i32 {
+        std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Attrs {
+    /// The `SECCOMP_FILTER_FLAG_*` bits in `linux/seccomp.h`.
+    const FLAG_TSYNC: u64 = 1 << 0;
+    const FLAG_LOG: u64 = 1 << 1;
+    const FLAG_SPEC_ALLOW: u64 = 1 << 2;
+
+    /// The flag word these attributes ask `seccomp(2)` for.
+    fn filter_flags(&self) -> u64 {
+        let mut flags: u64 = 0;
+        if self.ctl_tsync {
+            flags = flags | Self::FLAG_TSYNC;
+        }
+        if self.ctl_log {
+            flags = flags | Self::FLAG_LOG;
+        }
+        if self.ctl_ssb {
+            flags = flags | Self::FLAG_SPEC_ALLOW;
+        }
+        // `ctl_waitkill` has nothing to wait on without `SECCOMP_FILTER_FLAG_NEW_LISTENER`,
+        // and this module opens no notification listener.
+        flags
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Program {
+    /// Loads this program into the calling thread as its seccomp filter.
+    #[verifier::external_body]
+    fn install(&self, attrs: &Attrs) -> Result<(), Error> {
+        // `seccomp()` answers EACCES to a thread that holds neither CAP_SYS_ADMIN nor
+        // `no_new_privs`, so `ctl_nnp` goes in first.
+        if attrs.ctl_nnp {
+            let rc = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
+            if rc != 0 {
+                return Err(Error::NoNewPrivs(Error::errno()));
+            }
+        }
+
+        let mut filter: Vec<_> = self.assemble();
+
+        // The kernel copies the program out of `sock_fprog` before it returns, so the
+        // buffer only has to outlive the call.
+        let fprog = libc::sock_fprog {
+            len: filter.len() as u16,
+            filter: filter.as_mut_ptr() as *mut libc::sock_filter,
+        };
+        let rc = unsafe {
+            libc::syscall(
+                libc::SYS_seccomp,
+                libc::SECCOMP_SET_MODE_FILTER as libc::c_ulong,
+                attrs.filter_flags() as libc::c_ulong,
+                &fprog as *const libc::sock_fprog,
+            )
+        };
+        if rc != 0 {
+            // A thread that refuses TSYNC comes back as its own id rather than as -1,
+            // unless `SECCOMP_FILTER_FLAG_TSYNC_ESRCH` is set, which this module leaves off.
+            let errno = if rc < 0 { Error::errno() } else { libc::ESRCH };
+            return Err(Error::SetModeFilter(errno));
+        }
+        Ok(())
     }
 }
 

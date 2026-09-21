@@ -19,6 +19,7 @@ use builder::Builder;
 
 verus! {
 
+#[derive(Debug)]
 pub enum CompileError {
     /// Compiled policy exceeds the cBPF program size limit.
     PolicyTooLarge,

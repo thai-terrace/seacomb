@@ -1,6 +1,6 @@
 //! Tests of filter construction and native seccomp enforcement.
 
-use crate::api::{Filter, FilterError};
+use crate::api::{Error, Filter};
 use crate::compiler::CompileError;
 use crate::spec::policy::{Action, Arch, ArgCmp, Attrs, Rule, Syscall, SyscallName};
 
@@ -8,7 +8,7 @@ use crate::spec::policy::{Action, Arch, ArgCmp, Attrs, Rule, Syscall, SyscallNam
 fn native_constructor_adds_only_native() {
     let mut filter = Filter::new_native(Action::Errno(7)).unwrap();
     let native = Arch::native().unwrap();
-    assert!(matches!(filter.add_arch(native), Err(FilterError::DuplicateArch)));
+    assert!(matches!(filter.add_arch(native), Err(Error::DuplicateArch)));
     for arch in [Arch::X86, Arch::X86_64, Arch::X32, Arch::Arm, Arch::Aarch64] {
         if arch != native {
             filter.add_arch(arch).unwrap();
@@ -16,7 +16,7 @@ fn native_constructor_adds_only_native() {
     }
     assert!(matches!(
         Filter::new_native(Action::Errno(4095)),
-        Err(FilterError::BadAction)
+        Err(Error::BadAction)
     ));
 }
 
@@ -38,7 +38,7 @@ fn default_action_comparison_includes_payload() {
         let mut filter = Filter::new_native(default).unwrap();
         assert!(matches!(
             filter.add_rule(same, SyscallName::Getpid, vec![]),
-            Err(FilterError::ActionIsDefault)
+            Err(Error::ActionIsDefault)
         ));
         filter.add_rule(different, SyscallName::Getpid, vec![]).unwrap();
     }
@@ -58,7 +58,7 @@ fn action_payload_boundaries() {
     for errno in [4095, 4096, u16::MAX] {
         assert!(matches!(
             Filter::new(Action::Errno(errno)),
-            Err(FilterError::BadAction)
+            Err(Error::BadAction)
         ));
     }
 }
@@ -197,7 +197,7 @@ fn invalid_updates_preserve_existing_rules() {
         .unwrap();
     assert!(matches!(
         filter.add_arch(Arch::native().unwrap()),
-        Err(FilterError::DuplicateArch)
+        Err(Error::DuplicateArch)
     ));
     for (action, conds) in [
         (Action::Errno(4095), vec![]),
@@ -226,7 +226,7 @@ fn invalid_badarch_preserves_previous_action() {
     filter.on_badarch(Action::KillProcess).unwrap();
     assert!(matches!(
         filter.on_badarch(Action::Errno(4095)),
-        Err(FilterError::BadAction)
+        Err(Error::BadAction)
     ));
     assert_eq!(Child::run(&filter, || 0), Child::Killed(libc::SIGSYS));
 }
@@ -951,7 +951,7 @@ fn argument_out_of_range() {
     let conds = vec![ArgCmp::eq(6, 0)];
     assert!(matches!(
         filter.add_rule(Action::Errno(1), SyscallName::Lseek, conds),
-        Err(FilterError::ArgumentOutOfRange(6)),
+        Err(Error::ArgumentOutOfRange(6)),
     ));
 }
 
@@ -973,11 +973,11 @@ fn rule_checks_condition_indices() {
         .is_ok());
     assert!(matches!(
         rule((0..7).map(|arg| ArgCmp::eq(arg, 0)).collect()).check(&attrs),
-        Err(FilterError::ArgumentOutOfRange(6)),
+        Err(Error::ArgumentOutOfRange(6)),
     ));
     assert!(matches!(
         rule(vec![ArgCmp::eq(u32::MAX, 0)]).check(&attrs),
-        Err(FilterError::ArgumentOutOfRange(u32::MAX)),
+        Err(Error::ArgumentOutOfRange(u32::MAX)),
     ));
     assert!(rule(vec![ArgCmp::eq(5, 0), ArgCmp::eq(0, 0), ArgCmp::ne(5, 1)])
         .check(&attrs)
@@ -1002,7 +1002,7 @@ fn action_checks_return_validation_errors() {
     for errno in [4095, 4096, u16::MAX] {
         assert!(matches!(
             Action::Errno(errno).check(),
-            Err(FilterError::BadAction)
+            Err(Error::BadAction)
         ));
     }
 }
@@ -1022,19 +1022,19 @@ fn rule_checks_propagate_validation_errors() {
     assert!(rule(Action::Errno(1), vec![]).check(&attrs).is_ok());
     assert!(matches!(
         rule(Action::Errno(4095), vec![]).check(&attrs),
-        Err(FilterError::BadAction)
+        Err(Error::BadAction)
     ));
     assert!(matches!(
         rule(Action::Allow, vec![]).check(&attrs),
-        Err(FilterError::ActionIsDefault)
+        Err(Error::ActionIsDefault)
     ));
     assert!(matches!(
         rule(Action::Errno(1), (0..7).map(|arg| ArgCmp::eq(arg, 0)).collect()).check(&attrs),
-        Err(FilterError::ArgumentOutOfRange(6)),
+        Err(Error::ArgumentOutOfRange(6)),
     ));
     assert!(matches!(
         rule(Action::Errno(1), vec![ArgCmp::eq(6, 0)]).check(&attrs),
-        Err(FilterError::ArgumentOutOfRange(6)),
+        Err(Error::ArgumentOutOfRange(6)),
     ));
     assert!(rule(Action::Errno(1), vec![ArgCmp::eq(1, 0), ArgCmp::ne(1, 1)])
         .check(&attrs)
@@ -1053,7 +1053,7 @@ fn skip_rule_requires_tskip() {
         conds: vec![ArgCmp::eq(5, 0)],
         exact: true,
     };
-    assert!(matches!(rule.check(&attrs), Err(FilterError::SkipNotEnabled)));
+    assert!(matches!(rule.check(&attrs), Err(Error::SkipNotEnabled)));
     attrs.api_tskip = true;
     assert!(rule.check(&attrs).is_ok());
 }
