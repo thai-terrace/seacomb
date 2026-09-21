@@ -76,17 +76,14 @@ impl Event {
         }
     }
 
-    /// The x32 bit and the skip pseudo-syscall, as the filter's unsigned comparisons
-    /// of `seccomp_data.nr` see them.
+    /// The x32 bit and syscall numbers as unsigned filter comparisons see them.
     pub(super) proof fn lemma_nr(self)
         ensures
             self.x32_bit() <==> self.nr as u32 >= 0x4000_0000,
-            self.is_skip() <==> self.nr as u32 == Event::SKIP_NR as u32,
             forall |nr: i32| #[trigger] (nr as u32) == self.nr as u32 ==> nr == self.nr,
     {
         let m = self.nr;
         assert((m < 0 || m >= 0x4000_0000) <==> m as u32 >= 0x4000_0000) by (bit_vector);
-        assert((m == -1) <==> m as u32 == 0xFFFF_FFFFu32) by (bit_vector);
         assert forall |nr: i32| #[trigger] (nr as u32) == m as u32 implies nr == m by {
             assert((nr as u32) == (m as u32) ==> nr == m) by (bit_vector);
         }

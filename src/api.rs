@@ -115,27 +115,14 @@ impl Action {
 
 impl Rule {
     /// Checks whether this rule is valid for the given filter attributes.
-    pub fn check(&self, attrs: &Attrs) -> (res: Result<(), Error>)
-        ensures (res is Ok) == self.wf(*attrs)
+    pub fn check(&self, _attrs: &Attrs) -> (res: Result<(), Error>)
+        ensures (res is Ok) == self.wf(*_attrs)
     {
         self.action.check()?;
-        proof {
-            self.action.lemma_to_ret();
-            attrs.act_default.lemma_to_ret();
-        }
-        if self.action.to_ret() == attrs.act_default.to_ret() {
-            return Err(Error::ActionIsDefault);
-        }
-        match self.syscall {
-            Syscall::Skip if !attrs.api_tskip => return Err(Error::SkipNotEnabled),
-            _ => {},
-        }
         let mut i: usize = 0;
         while i < self.conds.len()
             invariant
                 self.action.wf(),
-                self.action != attrs.act_default,
-                self.syscall.wf(attrs.api_tskip),
                 i <= self.conds@.len(),
                 forall |k: int| #![trigger self.conds@[k]]
                     0 <= k < i ==> self.conds@[k].arg < Self::ARG_COUNT_MAX,
@@ -236,15 +223,15 @@ impl Filter {
     }
 
     /// Applies `action` to `syscall` when every argument test in `conds` holds.
-    pub fn add_rule(&mut self, action: Action, syscall: SyscallName, conds: Vec<ArgCmp>)
+    pub fn add_rule(&mut self, action: Action, syscall: Syscall, conds: Vec<ArgCmp>)
         -> (res: Result<(), Error>)
         requires old(self).wf()
         ensures
             final(self).wf(),
             res is Ok ==> final(self).policy().rules@ == old(self).policy().rules@.push(
-                Rule { action, syscall: Syscall::Name(syscall), conds, exact: false }),
+                Rule { action, syscall, conds, exact: false }),
     {
-        let rule = Rule { action, syscall: Syscall::Name(syscall), conds, exact: false };
+        let rule = Rule { action, syscall, conds, exact: false };
         rule.check(&self.policy.attrs)?;
 
         let ghost prev = self.policy.rules@;
@@ -335,8 +322,6 @@ impl Attrs {
         if self.ctl_ssb {
             flags = flags | Self::FLAG_SPEC_ALLOW;
         }
-        // `ctl_waitkill` has nothing to wait on without `SECCOMP_FILTER_FLAG_NEW_LISTENER`,
-        // and this module opens no notification listener.
         flags
     }
 }
@@ -345,7 +330,7 @@ impl Attrs {
 impl Program {
     /// Loads this program into the calling thread as its seccomp filter.
     #[verifier::external_body]
-    fn install(&self, attrs: &Attrs) -> Result<(), Error> {
+    pub fn install(&self, attrs: &Attrs) -> Result<(), Error> {
         // `seccomp()` answers EACCES to a thread that holds neither CAP_SYS_ADMIN nor
         // `no_new_privs`, so `ctl_nnp` goes in first.
         if attrs.ctl_nnp {

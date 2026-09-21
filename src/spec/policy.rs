@@ -33,13 +33,6 @@ pub struct ArgCmp {
     pub datum_b: u64,
 }
 
-/// The `int syscall` parameter as written by the policy author.
-pub enum Syscall {
-    Name(SyscallName),
-    /// Only allowed with `api_tskip`.
-    Skip,
-}
-
 /// One `seccomp_rule_add[_exact][_array]` call.
 pub struct Rule {
     pub action: Action,
@@ -65,10 +58,9 @@ pub struct Attrs {
     pub ctl_log: bool,
     /// Disable speculative store bypass mitigations.
     pub ctl_ssb: bool,
-    /// Select raw system error reporting; currently ignored.
-    pub api_sysrawrc: bool,
-    /// Request wait-killable notification semantics; currently ignored.
-    pub ctl_waitkill: bool,
+    // TODO: notification related flags.
+    // pub api_sysrawrc: bool,
+    // pub ctl_waitkill: bool,
 }
 
 /// A whole filter context (`scmp_filter_ctx`), viewed declaratively.
@@ -89,8 +81,6 @@ impl Default for Attrs {
             api_tskip: false,
             ctl_log: false,
             ctl_ssb: false,
-            api_sysrawrc: false,
-            ctl_waitkill: false,
         }
     }
 }
@@ -106,17 +96,26 @@ impl Action {
             _ => true,
         }
     }
-}
 
-impl Syscall {
-    /// `_syscall_valid` in `src/api.c`: the reserved range is rejected; `Event::SKIP_NR` needs `api_tskip`.
-    pub open spec fn wf(self, api_tskip: bool) -> bool {
+    /// Higher-precedence actions override lower  ones.
+    /// This behavior is similar to when we install multiple filters:
+    /// <https://docs.kernel.org/userspace-api/seccomp_filter.html#return-values>.
+    /// 
+    /// NOTE that, e.g., `Errno(1)` and `Error(2)` are not ordered.
+    pub open spec fn precedence(self) -> nat {
         match self {
-            Syscall::Name(_) => true,
-            Syscall::Skip => api_tskip,
+            Action::KillProcess => 7,
+            Action::KillThread => 6,
+            Action::Trap(_) => 5,
+            Action::Errno(_) => 4,
+            Action::Notify => 3,
+            Action::Trace(_) => 2,
+            Action::Log => 1,
+            Action::Allow => 0,
         }
     }
 }
+
 
 impl Rule {
     /// `src/arch.h`.
@@ -125,15 +124,12 @@ impl Rule {
     /// Conditions required to validate and compile a rule.
     pub open spec fn wf(self, attrs: Attrs) -> bool {
         &&& self.action.wf()
-        &&& self.action != attrs.act_default
-        &&& self.syscall.wf(attrs.api_tskip)
         &&& forall |i: int| #![trigger self.conds@[i]]
                 0 <= i < self.conds@.len() ==> self.conds@[i].arg < Self::ARG_COUNT_MAX
     }
 }
 
 impl Policy {
-    /// `db_col_db_add`: no duplicate arch (-EEXIST).
     pub open spec fn archs_wf(self) -> bool {
         forall |i: int, j: int| #![trigger self.archs@[i], self.archs@[j]]
             0 <= i < j < self.archs@.len() ==> self.archs@[i] != self.archs@[j]
@@ -169,10 +165,6 @@ pub enum SyscallMatch {
 }
 
 impl Event {
-    pub const SKIP_NR: i32 = -1;
-
-    pub open spec fn is_skip(self) -> bool { self.nr == Self::SKIP_NR }
-
     /// `nr >= X32_SYSCALL_BIT` (`src/arch-x32.h`) as the BPF's unsigned comparison sees it.
     pub open spec fn x32_bit(self) -> bool { self.nr < 0 || self.nr >= 0x4000_0000 }
 
@@ -187,14 +179,14 @@ impl Event {
     }
 
     /// Whether the syscall name matches the event and if it is an exact match or a multiplexed match.
-    pub open spec fn matches_syscall(self, arch: Arch, name: SyscallName) -> SyscallMatch {
+    pub open spec fn matches_syscall(self, arch: Arch, name: Syscall) -> SyscallMatch {
         if name.nr(arch) == Some(self.nr) {
             SyscallMatch::Exact
         } else if arch == Arch::X86 && {
             // Matching against multiplexed `socketcall` or `ipc` on x86.
-            ||| Some(self.nr) == SyscallName::Socketcall.nr(arch)
+            ||| Syscall::Socketcall.nr(arch) == Some(self.nr)
                 && name.to_socketcall_arg() == Some(self.args[0] & 0xFFFF_FFFF)
-            ||| Some(self.nr) == SyscallName::Ipc.nr(arch)
+            ||| Syscall::Ipc.nr(arch) == Some(self.nr)
                 && name.to_ipc_arg() == Some(self.args[0] & 0xFFFF_FFFF)
         } {
             SyscallMatch::Mux
@@ -230,8 +222,9 @@ impl Event {
 }
 
 impl Action {
-    pub const RET_ACTION_FULL: u32 = 0xffff_0000;
+    pub const RET_ACTION: u32 = 0xffff_0000;
     pub const RET_DATA: u32 = 0x0000_ffff;
+
     pub const RET_KILL_PROCESS: u32 = 0x8000_0000;
     pub const RET_KILL_THREAD: u32 = 0x0000_0000;
     pub const RET_TRAP: u32 = 0x0003_0000;
@@ -243,7 +236,7 @@ impl Action {
 
     /// Converts a BPF filter return value back to `Action`.
     pub open spec fn from_ret(ret: u32) -> Action {
-        let action = ret & Self::RET_ACTION_FULL;
+        let action = ret & Self::RET_ACTION;
         let data = (ret & Self::RET_DATA) as u16;
         if action == Self::RET_ALLOW {
             Action::Allow
@@ -300,14 +293,11 @@ impl Rule {
     pub open spec fn eval(self, arch: Arch, ev: Event) -> bool {
         let conds_hold = forall |i: int| #![trigger self.conds@[i]]
             0 <= i < self.conds@.len() ==> self.conds@[i].holds(arch, ev.args);
-        match self.syscall {
-            Syscall::Skip => ev.is_skip() && conds_hold,
-            Syscall::Name(name) => match ev.matches_syscall(arch, name) {
-                SyscallMatch::Exact => conds_hold,
-                // This is stricter than libseccomp, which still evaluates the conditions on a multiplexed syscall.
-                SyscallMatch::Mux => self.conds@.len() == 0,
-                SyscallMatch::None => false,
-            },
+        match ev.matches_syscall(arch, self.syscall) {
+            SyscallMatch::Exact => conds_hold,
+            // This is stricter than libseccomp, which still evaluates the conditions on a multiplexed syscall.
+            SyscallMatch::Mux => self.conds@.len() == 0,
+            SyscallMatch::None => false,
         }
     }
 }
@@ -316,9 +306,6 @@ impl Policy {
     pub open spec fn is_active_arch(self, arch: Arch, ev: Event) -> bool {
         &&& self.archs@.contains(arch)
         &&& ev.matches_arch(arch)
-        // Only x32 claims the skip pseudo-syscall when the policy covers both, since its
-        // rule costs fewer chain nodes and so outranks x86_64's in `db_rule_add`.
-        &&& arch == Arch::X86_64 ==> !ev.x32_bit() || (ev.is_skip() && !self.archs@.contains(Arch::X32))
         &&& arch == Arch::X32 ==> ev.x32_bit()
     }
 
@@ -335,6 +322,25 @@ impl Policy {
             &&& 0 <= i < self.rules@.len()
             &&& #[trigger] self.rules@[i].eval(a, ev)
             &&& self.rules@[i].action == act
+            // // A disambiguation rule following kernel's behavior:
+            // // 1. Higher precedence actions win.
+            // // 2. If two actions have the same precedence (e.g. `Errno(1)` and `Errno(2)`),
+            // //    the rule that was added last wins.
+            // //
+            // // In particular, this should imply that if we install two policies consecutively:
+            // // ```
+            // // policy1.install();
+            // // policy2.install();
+            // // ```
+            // // then the resulting behavior is equivalent to installing `policy1 + policy2` once.
+            // // (assuming other equal flags).
+            // &&& forall |j: int| #![trigger self.rules@[j]]
+            //         0 <= j < self.rules@.len() && j != i
+            //         ==> {
+            //             ||| !self.rules@[j].eval(a, ev)
+            //             ||| self.rules@[j].action.precedence() < act.precedence()
+            //             ||| j < i
+            //         }
         }
         // Take the default action when no rule matches on any active arch.
         ||| {
@@ -344,12 +350,6 @@ impl Policy {
                     self.is_active_arch(a, ev) && 0 <= i < self.rules@.len()
                     ==> !#[trigger] self.rules@[i].eval(a, ev)
         }
-    }
-
-    /// A policy is coherent if it never evaluates to two different actions on the same event.
-    pub open spec fn coherent(self) -> bool {
-        forall |ev: Event, a: Action, b: Action|
-            self.eval(ev, a) && self.eval(ev, b) ==> a == b
     }
 }
 

@@ -2,7 +2,7 @@ use vstd::prelude::*;
  
 verus! {
 
-/// A helper macro to define the `SyscallName` enum and its `SyscallName::nr` function.
+/// A helper macro to define the `Syscall` enum and its `Syscall::nr` function.
 macro_rules! syscalls {
     (
         $(#[$meta:meta])*
@@ -59,7 +59,7 @@ macro_rules! syscalls {
 syscalls! {
     /// Every syscall libseccomp knows on x86, x86_64, x32, arm or aarch64 (`src/syscalls.csv`).
     /// Extracted from <https://github.com/seccomp/libseccomp/blob/main/src/syscalls.csv>.
-    pub enum SyscallName {
+    pub enum Syscall {
         #[nr(Arch::X86_64, 43)]
         #[nr(Arch::X32, 0x4000_0000 + 43)]
         #[nr(Arch::Arm, 285)]
@@ -2522,33 +2522,40 @@ syscalls! {
         #[nr(Arch::Arm, 146)]
         #[nr(Arch::Aarch64, 66)]
         Writev,
+        // A special syscall to indicate it has been skipped.
+        #[nr(Arch::X86, -1)]
+        #[nr(Arch::X86_64, -1)]
+        #[nr(Arch::X32, -1)]
+        #[nr(Arch::Arm, -1)]
+        #[nr(Arch::Aarch64, -1)]
+        Skip,
     }
 }
 
-impl SyscallName {
+impl Syscall {
     /// `SYS_*` from `linux/net.h`: the call number under which x86 reaches this syscall through `socketcall`.
     pub open spec fn to_socketcall_arg(self) -> Option<u64> {
         match self {
-            SyscallName::Socket       => Some(1),
-            SyscallName::Bind         => Some(2),
-            SyscallName::Connect      => Some(3),
-            SyscallName::Listen       => Some(4),
-            SyscallName::Accept       => Some(5),
-            SyscallName::Getsockname  => Some(6),
-            SyscallName::Getpeername  => Some(7),
-            SyscallName::Socketpair   => Some(8),
-            SyscallName::Send         => Some(9),
-            SyscallName::Recv         => Some(10),
-            SyscallName::Sendto       => Some(11),
-            SyscallName::Recvfrom     => Some(12),
-            SyscallName::Shutdown     => Some(13),
-            SyscallName::Setsockopt   => Some(14),
-            SyscallName::Getsockopt   => Some(15),
-            SyscallName::Sendmsg      => Some(16),
-            SyscallName::Recvmsg      => Some(17),
-            SyscallName::Accept4      => Some(18),
-            SyscallName::Recvmmsg     => Some(19),
-            SyscallName::Sendmmsg     => Some(20),
+            Syscall::Socket       => Some(1),
+            Syscall::Bind         => Some(2),
+            Syscall::Connect      => Some(3),
+            Syscall::Listen       => Some(4),
+            Syscall::Accept       => Some(5),
+            Syscall::Getsockname  => Some(6),
+            Syscall::Getpeername  => Some(7),
+            Syscall::Socketpair   => Some(8),
+            Syscall::Send         => Some(9),
+            Syscall::Recv         => Some(10),
+            Syscall::Sendto       => Some(11),
+            Syscall::Recvfrom     => Some(12),
+            Syscall::Shutdown     => Some(13),
+            Syscall::Setsockopt   => Some(14),
+            Syscall::Getsockopt   => Some(15),
+            Syscall::Sendmsg      => Some(16),
+            Syscall::Recvmsg      => Some(17),
+            Syscall::Accept4      => Some(18),
+            Syscall::Recvmmsg     => Some(19),
+            Syscall::Sendmmsg     => Some(20),
             _ => None,
         }
     }
@@ -2556,18 +2563,18 @@ impl SyscallName {
     /// `linux/ipc.h`: the call number under which x86 reaches this syscall through `ipc`.
     pub open spec fn to_ipc_arg(self) -> Option<u64> {
         match self {
-            SyscallName::Semop        => Some(1),
-            SyscallName::Semget       => Some(2),
-            SyscallName::Semctl       => Some(3),
-            SyscallName::Semtimedop   => Some(4),
-            SyscallName::Msgsnd       => Some(11),
-            SyscallName::Msgrcv       => Some(12),
-            SyscallName::Msgget       => Some(13),
-            SyscallName::Msgctl       => Some(14),
-            SyscallName::Shmat        => Some(21),
-            SyscallName::Shmdt        => Some(22),
-            SyscallName::Shmget       => Some(23),
-            SyscallName::Shmctl       => Some(24),
+            Syscall::Semop        => Some(1),
+            Syscall::Semget       => Some(2),
+            Syscall::Semctl       => Some(3),
+            Syscall::Semtimedop   => Some(4),
+            Syscall::Msgsnd       => Some(11),
+            Syscall::Msgrcv       => Some(12),
+            Syscall::Msgget       => Some(13),
+            Syscall::Msgctl       => Some(14),
+            Syscall::Shmat        => Some(21),
+            Syscall::Shmdt        => Some(22),
+            Syscall::Shmget       => Some(23),
+            Syscall::Shmctl       => Some(24),
             _ => None,
         }
     }

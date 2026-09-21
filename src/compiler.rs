@@ -1,8 +1,4 @@
 //! A simple compiler from policies to cBPF programs.
-//!
-//! The filter follows the shape libseccomp's does: one test per architecture the
-//! policy covers, inside it one test per rule, and inside that the rule's own
-//! argument tests.
 
 use vstd::prelude::*;
 use crate::spec::{policy::*, cbpf::*};
@@ -46,7 +42,9 @@ impl Policy {
         //      ret #act_badarch
         b.emit(Instr::Ret(RetVal::K(self.attrs.act_badarch.to_ret())))?;
 
-        // One block per architecture, tried in turn:
+        proof { Builder::lemma_ret(b.rev@, self.attrs.act_badarch.to_ret()); }
+
+        // One block per architecture token, tried in turn:
         //
         //      <block of the first architecture>
         //      <block of the second architecture>

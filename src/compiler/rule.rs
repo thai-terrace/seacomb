@@ -17,6 +17,22 @@ impl Arch {
 }
 
 impl Action {
+    /// Executable version of [`Action::precedence`].
+    pub(super) fn priority(&self) -> (res: u8)
+        ensures res == self.precedence()
+    {
+        match self {
+            Action::KillProcess => 7,
+            Action::KillThread => 6,
+            Action::Trap(_) => 5,
+            Action::Errno(_) => 4,
+            Action::Notify => 3,
+            Action::Trace(_) => 2,
+            Action::Log => 1,
+            Action::Allow => 0,
+        }
+    }
+
     /// The filter return value that makes the kernel take this action.
     pub open spec fn spec_to_ret(&self) -> u32 {
         match self {
@@ -1209,14 +1225,11 @@ impl Rule {
         if arch != Arch::X86 || self.conds@.len() > 0 {
             None
         } else {
-            match self.syscall {
-                Syscall::Skip => None,
-                Syscall::Name(name) => match name.to_socketcall_arg() {
+            match self.syscall.to_socketcall_arg() {
+                Some(arg) => Some(arg as u32),
+                None => match self.syscall.to_ipc_arg() {
                     Some(arg) => Some(arg as u32),
-                    None => match name.to_ipc_arg() {
-                        Some(arg) => Some(arg as u32),
-                        None => None,
-                    },
+                    None => None,
                 },
             }
         }
@@ -1230,14 +1243,11 @@ impl Rule {
         if arch != Arch::X86 || self.conds.len() > 0 {
             return None;
         }
-        match &self.syscall {
-            Syscall::Skip => None,
-            Syscall::Name(name) => match name.socketcall_arg() {
+        match self.syscall.socketcall_arg() {
+            Some(arg) => Some(arg as u32),
+            None => match self.syscall.ipc_arg() {
                 Some(arg) => Some(arg as u32),
-                None => match name.ipc_arg() {
-                    Some(arg) => Some(arg as u32),
-                    None => None,
-                },
+                None => None,
             },
         }
     }
@@ -1247,16 +1257,12 @@ impl Rule {
         if arch != Arch::X86 || self.conds@.len() > 0 {
             None
         } else {
-            let mux = match self.syscall {
-                Syscall::Skip => None,
-                Syscall::Name(name) =>
-                    if name.to_socketcall_arg() is Some {
-                        Some(SyscallName::Socketcall)
-                    } else if name.to_ipc_arg() is Some {
-                        Some(SyscallName::Ipc)
-                    } else {
-                        None
-                    },
+            let mux = if self.syscall.to_socketcall_arg() is Some {
+                Some(Syscall::Socketcall)
+            } else if self.syscall.to_ipc_arg() is Some {
+                Some(Syscall::Ipc)
+            } else {
+                None
             };
             match mux {
                 Some(name) => match name.spec_nr(arch) {
@@ -1277,16 +1283,12 @@ impl Rule {
         if arch != Arch::X86 || self.conds.len() > 0 {
             return None;
         }
-        let mux = match &self.syscall {
-            Syscall::Skip => None,
-            Syscall::Name(name) =>
-                if name.socketcall_arg().is_some() {
-                    Some(SyscallName::Socketcall)
-                } else if name.ipc_arg().is_some() {
-                    Some(SyscallName::Ipc)
-                } else {
-                    None
-                },
+        let mux = if self.syscall.socketcall_arg().is_some() {
+            Some(Syscall::Socketcall)
+        } else if self.syscall.ipc_arg().is_some() {
+            Some(Syscall::Ipc)
+        } else {
+            None
         };
         match mux {
             Some(name) => match name.nr(arch) {
@@ -1295,6 +1297,77 @@ impl Rule {
             },
             None => None,
         }
+    }
+}
+
+impl Rule {
+    /// Emits the direct and multiplexed syscall tests for this rule.
+    ///
+    /// ```text
+    ///     <direct syscall test and argument conditions>
+    ///     <multiplexer test and call-number condition>
+    /// ```
+    pub(super) fn emit_tests(&self, b: &mut Builder, arch: Arch) -> (res: Result<(), CompileError>)
+        requires
+            forall |i: int| #![trigger self.conds@[i]]
+                0 <= i < self.conds@.len() ==> self.conds@[i].arg < Self::ARG_COUNT_MAX,
+            0 < b.rev@.len(), b.wf(),
+        ensures
+            Builder::extends(old(b).rev@, final(b).rev@),
+            final(b).wf(),
+            res is Ok ==> forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE
+                && self.eval(arch, Event::of(data)) ==>
+                #[trigger] Builder::returns(final(b).rev@, data, final(b).rev@.len(),
+                    Event::of(data).nr as u32, self.action.to_ret()),
+            res is Ok ==> forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE
+                && !self.eval(arch, Event::of(data)) ==>
+                #[trigger] Builder::goes_to(final(b).rev@, data, final(b).rev@.len(),
+                    Event::of(data).nr as u32, old(b).rev@.len(), Event::of(data).nr as u32),
+    {
+        let ghost prev = b.rev@;
+        if let Some(nr) = self.mux_nr(arch) {
+            self.emit(b, arch, nr, true)?;
+        }
+        let ghost mux = b.rev@;
+        if let Some(nr) = self.syscall.bpf_nr(arch) {
+            self.emit(b, arch, nr, true)?;
+        }
+        proof {
+            assert forall |data: &[u8]|
+                #![trigger Builder::returns(b.rev@, data, b.rev@.len(), Event::of(data).nr as u32, self.action.to_ret())]
+                #![trigger Builder::goes_to(b.rev@, data, b.rev@.len(), Event::of(data).nr as u32,
+                    prev.len(), Event::of(data).nr as u32)]
+                data@.len() == Program::SECCOMP_DATA_SIZE implies
+                if self.eval(arch, Event::of(data)) {
+                    Builder::returns(b.rev@, data, b.rev@.len(),
+                        Event::of(data).nr as u32, self.action.to_ret())
+                } else {
+                    Builder::goes_to(b.rev@, data, b.rev@.len(),
+                        Event::of(data).nr as u32, prev.len(), Event::of(data).nr as u32)
+                } by {
+                let ev = Event::of(data);
+                let nr = ev.nr as u32;
+                Event::lemma_image(data);
+                self.lemma_matches(arch, ev);
+                let own = match self.syscall.spec_bpf_nr(arch) {
+                    Some(n) => self.matches_at(arch, n, ev),
+                    None => false,
+                };
+                if !own {
+                    assert(Builder::goes_to(b.rev@, data, b.rev@.len(), nr, mux.len(), nr));
+                    if self.eval(arch, ev) {
+                        assert(Builder::returns(mux, data, mux.len(), nr, self.action.to_ret()));
+                        Builder::lemma_then(mux, b.rev@, data, b.rev@.len(), nr, mux.len(), nr,
+                            0, self.action.to_ret());
+                    } else {
+                        assert(Builder::goes_to(mux, data, mux.len(), nr, prev.len(), nr));
+                        Builder::lemma_then(mux, b.rev@, data, b.rev@.len(), nr, mux.len(), nr,
+                            prev.len(), nr);
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 
