@@ -49,20 +49,25 @@ pub struct Rule {
     pub exact: bool,
 }
 
-/// `SCMP_FLTATR_CTL_OPTIMIZE` values.
-pub enum Optimize { ByPriority, BinaryTree }
-
 /// Filter attributes, `enum scmp_filter_attr` (`struct db_filter_attr`).
 pub struct Attrs {
+    /// Default action when no rule matches.
     pub act_default: Action,
+    /// Default action when the syscall's architecture is not supported by the policy.
     pub act_badarch: Action,
+    /// Set `no_new_privs` before installing the filter.
     pub ctl_nnp: bool,
+    /// Synchronize the installed filter across all threads.
     pub ctl_tsync: bool,
+    /// Allow rules for syscall number -1 (`Syscall::Skip`).
     pub api_tskip: bool,
+    /// Request logging of all filter actions except `Allow`.
     pub ctl_log: bool,
+    /// Disable speculative store bypass mitigations.
     pub ctl_ssb: bool,
-    pub ctl_optimize: Optimize,
+    /// Select raw system error reporting; currently ignored.
     pub api_sysrawrc: bool,
+    /// Request wait-killable notification semantics; currently ignored.
     pub ctl_waitkill: bool,
 }
 
@@ -71,10 +76,6 @@ pub struct Policy {
     pub attrs: Attrs,
     pub archs: Vec<Arch>,
     pub rules: Vec<Rule>,
-}
-
-impl Default for Optimize {
-    fn default() -> Self { Optimize::ByPriority }
 }
 
 impl Default for Attrs {
@@ -88,7 +89,6 @@ impl Default for Attrs {
             api_tskip: false,
             ctl_log: false,
             ctl_ssb: false,
-            ctl_optimize: Optimize::default(),
             api_sysrawrc: false,
             ctl_waitkill: false,
         }

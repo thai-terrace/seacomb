@@ -1,36 +1,22 @@
-//! Abstract syntax and semantics of seccomp filters: the subset of classic
-//! BPF (cBPF) accepted by `seccomp_check_filter()`, executed over the bytes
-//! of `struct seccomp_data`.
-//!
-//! Linux references:
-//! - `bpf_check_classic()`, generic cBPF validation:
-//!   <https://github.com/torvalds/linux/blob/40288c9206c17eb66a603262e06a58d300d0f279/net/core/filter.c#L1079-L1155>
-//! - `seccomp_check_filter()`, seccomp-specific allow list and rewrites:
-//!   <https://github.com/torvalds/linux/blob/40288c9206c17eb66a603262e06a58d300d0f279/kernel/seccomp.c#L278-L346>
-//! - `bpf_convert_filter()`, the cBPF-to-eBPF translation that defines run-time behaviour:
-//!   <https://github.com/torvalds/linux/blob/40288c9206c17eb66a603262e06a58d300d0f279/net/core/filter.c#L584>
-//! - `struct seccomp_data`:
-//!   <https://github.com/torvalds/linux/blob/40288c9206c17eb66a603262e06a58d300d0f279/include/uapi/linux/seccomp.h#L62-L67>
+//! Abstract syntax and semantics of a subset of
+//! cBPF accepted by `seccomp_check_filter()`.
 
 use vstd::prelude::*;
 
 // Syntax
 verus! {
 
-/// Second operand of ALU and conditional jump instructions (`BPF_SRC`): `BPF_K`, `BPF_X`.
 pub enum Src { K(u32), X }
 
-/// Return value (`BPF_RVAL`): `BPF_K`, `BPF_A`.
 pub enum RetVal { K(u32), A }
 
-/// ALU operator allowed by seccomp, numbered by its `BPF_OP` bits.
 #[derive(Clone, Copy)]
 pub enum AluOp {
     Add = 0x00, Sub = 0x10, Mul = 0x20, Div = 0x30, Or = 0x40,
     And = 0x50, Lsh = 0x60, Rsh = 0x70, Xor = 0xa0,
 }
 
-/// Comparison of a conditional jump (`BPF_OP` of class `BPF_JMP`, except `BPF_JA`); unsigned.
+/// Comparison of a conditional jump (`BPF_OP` of class `BPF_JMP`, except `BPF_JA`).
 #[derive(Clone, Copy)]
 pub enum JmpOp { Eq = 0x10, Gt = 0x20, Ge = 0x30, Set = 0x40 }
 
@@ -77,6 +63,7 @@ pub struct Program {
 }
 
 impl Instr {
+    /// Well-formed instructions.
     pub open spec fn wf(self, pc: nat, max_pc: nat) -> bool {
         match self {
             // `seccomp_check_filter()`: "32-bit aligned and not out of bounds".
