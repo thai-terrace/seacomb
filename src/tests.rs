@@ -21,13 +21,11 @@ fn native_constructor_adds_only_native() {
 }
 
 #[test]
-fn seven_conditions_are_rejected() {
+fn seven_conditions_compile() {
     let mut filter = Filter::new_native(Action::Allow).unwrap();
     let conds = (0..7).map(|arg| ArgCmp::eq(arg % 6, 0)).collect();
-    assert!(matches!(
-        filter.add_rule(Action::Errno(1), SyscallName::Getpid, conds),
-        Err(FilterError::TooManyConditions(7)),
-    ));
+    filter.add_rule(Action::Errno(1), SyscallName::Getpid, conds).unwrap();
+    assert!(filter.to_cbpf().is_ok());
 }
 
 #[test]
@@ -937,15 +935,13 @@ fn rule_repeats_default() {
         .is_err());
 }
 
-/// Two tests of one argument in a single rule are turned down.
+/// Multiple tests of one argument in a single rule compile together.
 #[test]
-fn duplicate_argument() {
+fn repeated_argument_conditions_compile() {
     let mut filter = Filter::new_native(Action::Allow).unwrap();
     let conds = vec![ArgCmp::eq(1, 0), ArgCmp::ne(1, 1)];
-    assert!(matches!(
-        filter.add_rule(Action::Errno(1), SyscallName::Lseek, conds),
-        Err(FilterError::DuplicateArgument(1)),
-    ));
+    filter.add_rule(Action::Errno(1), SyscallName::Lseek, conds).unwrap();
+    assert!(filter.to_cbpf().is_ok());
 }
 
 /// An argument the architecture does not have is turned down.
@@ -960,29 +956,32 @@ fn argument_out_of_range() {
 }
 
 #[test]
-fn condition_checks_report_specific_errors() {
+fn rule_checks_condition_indices() {
+    let attrs = Attrs::default();
     let rule = |conds| Rule {
         action: Action::Allow,
         syscall: Syscall::Name(SyscallName::Getpid),
         conds,
         exact: false,
     };
-    assert!(rule(vec![]).check_conds().is_ok());
+    assert!(rule(vec![]).check(&attrs).is_ok());
     assert!(rule((0..6).rev().map(|arg| ArgCmp::eq(arg, 0)).collect())
-        .check_conds()
+        .check(&attrs)
+        .is_ok());
+    assert!(rule((0..7).map(|arg| ArgCmp::eq(arg % 6, 0)).collect())
+        .check(&attrs)
         .is_ok());
     assert!(matches!(
-        rule((0..7).map(|arg| ArgCmp::eq(arg, 0)).collect()).check_conds(),
-        Err(FilterError::TooManyConditions(7)),
+        rule((0..7).map(|arg| ArgCmp::eq(arg, 0)).collect()).check(&attrs),
+        Err(FilterError::ArgumentOutOfRange(6)),
     ));
     assert!(matches!(
-        rule(vec![ArgCmp::eq(u32::MAX, 0)]).check_conds(),
+        rule(vec![ArgCmp::eq(u32::MAX, 0)]).check(&attrs),
         Err(FilterError::ArgumentOutOfRange(u32::MAX)),
     ));
-    assert!(matches!(
-        rule(vec![ArgCmp::eq(5, 0), ArgCmp::eq(0, 0), ArgCmp::ne(5, 1)]).check_conds(),
-        Err(FilterError::DuplicateArgument(5)),
-    ));
+    assert!(rule(vec![ArgCmp::eq(5, 0), ArgCmp::eq(0, 0), ArgCmp::ne(5, 1)])
+        .check(&attrs)
+        .is_ok());
 }
 
 #[test]
@@ -1031,16 +1030,15 @@ fn rule_checks_propagate_validation_errors() {
     ));
     assert!(matches!(
         rule(Action::Errno(1), (0..7).map(|arg| ArgCmp::eq(arg, 0)).collect()).check(&attrs),
-        Err(FilterError::TooManyConditions(7)),
+        Err(FilterError::ArgumentOutOfRange(6)),
     ));
     assert!(matches!(
         rule(Action::Errno(1), vec![ArgCmp::eq(6, 0)]).check(&attrs),
         Err(FilterError::ArgumentOutOfRange(6)),
     ));
-    assert!(matches!(
-        rule(Action::Errno(1), vec![ArgCmp::eq(1, 0), ArgCmp::ne(1, 1)]).check(&attrs),
-        Err(FilterError::DuplicateArgument(1)),
-    ));
+    assert!(rule(Action::Errno(1), vec![ArgCmp::eq(1, 0), ArgCmp::ne(1, 1)])
+        .check(&attrs)
+        .is_ok());
 }
 
 #[test]

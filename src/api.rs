@@ -13,12 +13,8 @@ pub enum FilterError {
     BadAction,
     /// A rule has the same action as the filter's default.
     ActionIsDefault,
-    /// The number of conditions exceeds the six syscall arguments.
-    TooManyConditions(usize),
     /// A condition uses an argument index outside zero through five.
     ArgumentOutOfRange(u32),
-    /// More than one condition tests this argument index.
-    DuplicateArgument(u32),
     /// A skip rule requires the skip-syscall option to be enabled.
     SkipNotEnabled,
     /// The filter already includes this architecture.
@@ -128,41 +124,19 @@ impl Rule {
             Syscall::Skip if !attrs.api_tskip => return Err(FilterError::SkipNotEnabled),
             _ => {},
         }
-        self.check_conds()
-    }
-
-    /// Checks that each condition tests a distinct argument with an index from zero to five.
-    pub fn check_conds(&self) -> (res: Result<(), FilterError>)
-        ensures (res is Ok) == self.conds_wf()
-    {
-        if self.conds.len() > Self::ARG_COUNT_MAX as usize {
-            return Err(FilterError::TooManyConditions(self.conds.len()));
-        }
         let mut i: usize = 0;
         while i < self.conds.len()
             invariant
-                i <= self.conds@.len() <= Self::ARG_COUNT_MAX,
+                self.action.wf(),
+                self.action != attrs.act_default,
+                self.syscall.wf(attrs.api_tskip),
+                i <= self.conds@.len(),
                 forall |k: int| #![trigger self.conds@[k]]
                     0 <= k < i ==> self.conds@[k].arg < Self::ARG_COUNT_MAX,
-                forall |k: int, l: int| #![trigger self.conds@[k], self.conds@[l]]
-                    0 <= k < l < i ==> self.conds@[k].arg != self.conds@[l].arg,
             decreases self.conds@.len() - i
         {
             if self.conds[i].arg >= Self::ARG_COUNT_MAX {
                 return Err(FilterError::ArgumentOutOfRange(self.conds[i].arg));
-            }
-            let mut j: usize = 0;
-            while j < i
-                invariant
-                    j <= i < self.conds@.len(),
-                    forall |k: int| #![trigger self.conds@[k]]
-                        0 <= k < j ==> self.conds@[k].arg != self.conds@[i as int].arg,
-                decreases i - j
-            {
-                if self.conds[j].arg == self.conds[i].arg {
-                    return Err(FilterError::DuplicateArgument(self.conds[i].arg));
-                }
-                j += 1;
             }
             i += 1;
         }
@@ -199,7 +173,6 @@ impl Filter {
             policy: Policy {
                 attrs: Attrs { act_default, act_badarch: Action::KillThread, ..Attrs::default() },
                 archs: Vec::new(),
-                priorities: Vec::new(),
                 rules: Vec::new(),
             },
         })

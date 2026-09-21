@@ -49,12 +49,6 @@ pub struct Rule {
     pub exact: bool,
 }
 
-/// One `seccomp_syscall_priority` call.
-pub struct Priority {
-    pub syscall: Syscall,
-    pub priority: u8,
-}
-
 /// `SCMP_FLTATR_CTL_OPTIMIZE` values.
 pub enum Optimize { ByPriority, BinaryTree }
 
@@ -76,8 +70,6 @@ pub struct Attrs {
 pub struct Policy {
     pub attrs: Attrs,
     pub archs: Vec<Arch>,
-    /// No effect on semantics but affects final codegen.
-    pub priorities: Vec<Priority>,
     pub rules: Vec<Rule>,
 }
 
@@ -130,21 +122,13 @@ impl Rule {
     /// `src/arch.h`.
     pub const ARG_COUNT_MAX: u32 = 6;
 
-    /// `db_col_rule_add`.
-    pub open spec fn conds_wf(self) -> bool {
-        &&& self.conds@.len() <= Self::ARG_COUNT_MAX as nat
-        &&& forall |i: int| #![trigger self.conds@[i]]
-                0 <= i < self.conds@.len() ==> self.conds@[i].arg < Self::ARG_COUNT_MAX
-        &&& forall |i: int, j: int| #![trigger self.conds@[i], self.conds@[j]]
-                0 <= i < j < self.conds@.len() ==> self.conds@[i].arg != self.conds@[j].arg
-    }
-
-    /// `seccomp_rule_add*`.
+    /// Conditions required to validate and compile a rule.
     pub open spec fn wf(self, attrs: Attrs) -> bool {
         &&& self.action.wf()
         &&& self.action != attrs.act_default
         &&& self.syscall.wf(attrs.api_tskip)
-        &&& self.conds_wf()
+        &&& forall |i: int| #![trigger self.conds@[i]]
+                0 <= i < self.conds@.len() ==> self.conds@[i].arg < Self::ARG_COUNT_MAX
     }
 }
 
@@ -161,9 +145,6 @@ impl Policy {
         &&& self.archs_wf()
         &&& forall |i: int| #![trigger self.rules@[i]]
                 0 <= i < self.rules@.len() ==> self.rules@[i].wf(self.attrs)
-        &&& forall |i: int| #![trigger self.priorities@[i]]
-                0 <= i < self.priorities@.len()
-                    ==> self.priorities@[i].syscall.wf(self.attrs.api_tskip)
     }
 }
 

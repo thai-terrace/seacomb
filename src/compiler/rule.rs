@@ -961,7 +961,11 @@ impl Rule {
     /// end:
     /// ```
     pub(super) fn emit(&self, b: &mut Builder, arch: Arch, nr: u32, a_live: bool) -> (res: Result<(), CompileError>)
-        requires self.conds_wf(), 0 < b.rev@.len(), b.wf()
+        requires
+            forall |i: int| #![trigger self.conds@[i]]
+                0 <= i < self.conds@.len() ==> self.conds@[i].arg < Self::ARG_COUNT_MAX,
+            0 < b.rev@.len(),
+            b.wf(),
         ensures
             Builder::extends(old(b).rev@, final(b).rev@),
             final(b).wf(),
@@ -1065,7 +1069,11 @@ impl Rule {
     /// end:
     /// ```
     fn emit_body(&self, b: &mut Builder, arch: Arch, nr: u32) -> (res: Result<(), CompileError>)
-        requires self.conds_wf(), 0 < b.rev@.len(), b.wf()
+        requires
+            forall |i: int| #![trigger self.conds@[i]]
+                0 <= i < self.conds@.len() ==> self.conds@[i].arg < Self::ARG_COUNT_MAX,
+            0 < b.rev@.len(),
+            b.wf(),
         ensures
             Builder::extends(old(b).rev@, final(b).rev@),
             final(b).wf(),
@@ -1143,7 +1151,8 @@ impl Rule {
         while i > 0
             invariant
                 i <= self.conds@.len(),
-                self.conds_wf(),
+                forall |j: int| #![trigger self.conds@[j]]
+                    0 <= j < self.conds@.len() ==> self.conds@[j].arg < Self::ARG_COUNT_MAX,
                 0 < end == old(b).rev@.len(),
                 b.wf(),
                 Builder::extends(old(b).rev@, b.rev@),
