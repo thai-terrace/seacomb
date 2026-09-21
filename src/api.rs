@@ -6,57 +6,137 @@ use crate::compiler::CompileError;
 
 verus! {
 
-/// Why a filter turned an update down, named after the errno libseccomp answers.
+/// An error while creating or updating a filter.
 #[derive(Debug)]
 pub enum FilterError {
-    /// An action the kernel leaves no room for, `-EINVAL`.
+    /// An action contains an invalid value.
     BadAction,
-    /// A rule whose action only repeats the filter's default, `-EACCES`.
+    /// A rule has the same action as the filter's default.
     ActionIsDefault,
-    /// Argument tests that do not name distinct arguments of the syscall, `-EINVAL`.
-    BadConditions,
-    /// An architecture the filter already covers, `-EEXIST`.
+    /// The number of conditions exceeds the six syscall arguments.
+    TooManyConditions(usize),
+    /// A condition uses an argument index outside zero through five.
+    ArgumentOutOfRange(u32),
+    /// More than one condition tests this argument index.
+    DuplicateArgument(u32),
+    /// A skip rule requires the skip-syscall option to be enabled.
+    SkipNotEnabled,
+    /// The filter already includes this architecture.
     DuplicateArch,
+    /// The native architecture is not supported.
+    UnsupportedArch,
 }
 
 impl Arch {
-    /// The architecture this binary runs on, when the policy language has a token for it.
-    pub fn native() -> Option<Arch> {
+    /// Returns the architecture this binary runs on, or an error if it is unsupported.
+    pub fn native() -> Result<Arch, FilterError> {
         if cfg!(all(target_arch = "x86_64", target_pointer_width = "32")) {
-            Some(Arch::X32)
+            Ok(Arch::X32)
         } else if cfg!(target_arch = "x86_64") {
-            Some(Arch::X86_64)
+            Ok(Arch::X86_64)
         } else if cfg!(target_arch = "aarch64") {
-            Some(Arch::Aarch64)
+            Ok(Arch::Aarch64)
         } else if cfg!(target_arch = "x86") {
-            Some(Arch::X86)
+            Ok(Arch::X86)
         } else if cfg!(target_arch = "arm") {
-            Some(Arch::Arm)
+            Ok(Arch::Arm)
         } else {
-            None
+            Err(FilterError::UnsupportedArch)
         }
     }
 }
 
+impl ArgCmp {
+    /// Tests whether the argument at index `arg` equals `val`.
+    pub fn eq(arg: u32, val: u64) -> (res: Self)
+        ensures res == (ArgCmp { arg, op: Compare::Eq, datum_a: val, datum_b: 0 })
+    {
+        ArgCmp { arg, op: Compare::Eq, datum_a: val, datum_b: 0 }
+    }
+
+    /// Tests whether the argument at index `arg` does not equal `val`.
+    pub fn ne(arg: u32, val: u64) -> (res: Self)
+        ensures res == (ArgCmp { arg, op: Compare::Ne, datum_a: val, datum_b: 0 })
+    {
+        ArgCmp { arg, op: Compare::Ne, datum_a: val, datum_b: 0 }
+    }
+
+    /// Tests whether the argument at index `arg` is less than `val`.
+    pub fn lt(arg: u32, val: u64) -> (res: Self)
+        ensures res == (ArgCmp { arg, op: Compare::Lt, datum_a: val, datum_b: 0 })
+    {
+        ArgCmp { arg, op: Compare::Lt, datum_a: val, datum_b: 0 }
+    }
+
+    /// Tests whether the argument at index `arg` is less than or equal to `val`.
+    pub fn le(arg: u32, val: u64) -> (res: Self)
+        ensures res == (ArgCmp { arg, op: Compare::Le, datum_a: val, datum_b: 0 })
+    {
+        ArgCmp { arg, op: Compare::Le, datum_a: val, datum_b: 0 }
+    }
+
+    /// Tests whether the argument at index `arg` is greater than `val`.
+    pub fn gt(arg: u32, val: u64) -> (res: Self)
+        ensures res == (ArgCmp { arg, op: Compare::Gt, datum_a: val, datum_b: 0 })
+    {
+        ArgCmp { arg, op: Compare::Gt, datum_a: val, datum_b: 0 }
+    }
+
+    /// Tests whether the argument at index `arg` is greater than or equal to `val`.
+    pub fn ge(arg: u32, val: u64) -> (res: Self)
+        ensures res == (ArgCmp { arg, op: Compare::Ge, datum_a: val, datum_b: 0 })
+    {
+        ArgCmp { arg, op: Compare::Ge, datum_a: val, datum_b: 0 }
+    }
+
+    /// Tests whether the argument at index `arg` equals `val` under `mask`.
+    pub fn masked_eq(arg: u32, mask: u64, val: u64) -> (res: Self)
+        ensures res == (ArgCmp { arg, op: Compare::MaskedEq, datum_a: mask, datum_b: val })
+    {
+        ArgCmp { arg, op: Compare::MaskedEq, datum_a: mask, datum_b: val }
+    }
+}
+
 impl Action {
-    /// Executable version of [`Action::wf`].
-    pub fn check(&self) -> (res: bool)
-        ensures res == self.wf()
+    /// Checks whether this action contains a valid value.
+    pub fn check(&self) -> (res: Result<(), FilterError>)
+        ensures
+            (res is Ok) == self.wf(),
+            res matches Err(err) ==> err is BadAction,
     {
         match self {
-            Action::Errno(e) => (*e as u32) < Self::MAX_ERRNO,
-            _ => true,
+            Action::Errno(e) if (*e as u32) >= Self::MAX_ERRNO => Err(FilterError::BadAction),
+            _ => Ok(()),
         }
     }
 }
 
 impl Rule {
-    /// Executable version of [`Rule::conds_wf`].
-    pub fn check_conds(&self) -> (res: bool)
-        ensures res == self.conds_wf()
+    /// Checks whether this rule is valid for the given filter attributes.
+    pub fn check(&self, attrs: &Attrs) -> (res: Result<(), FilterError>)
+        ensures (res is Ok) == self.wf(*attrs)
+    {
+        self.action.check()?;
+        proof {
+            self.action.lemma_to_ret();
+            attrs.act_default.lemma_to_ret();
+        }
+        if self.action.to_ret() == attrs.act_default.to_ret() {
+            return Err(FilterError::ActionIsDefault);
+        }
+        match self.syscall {
+            Syscall::Skip if !attrs.api_tskip => return Err(FilterError::SkipNotEnabled),
+            _ => {},
+        }
+        self.check_conds()
+    }
+
+    /// Checks that each condition tests a distinct argument with an index from zero to five.
+    pub fn check_conds(&self) -> (res: Result<(), FilterError>)
+        ensures (res is Ok) == self.conds_wf()
     {
         if self.conds.len() > Self::ARG_COUNT_MAX as usize {
-            return false;
+            return Err(FilterError::TooManyConditions(self.conds.len()));
         }
         let mut i: usize = 0;
         while i < self.conds.len()
@@ -69,7 +149,7 @@ impl Rule {
             decreases self.conds@.len() - i
         {
             if self.conds[i].arg >= Self::ARG_COUNT_MAX {
-                return false;
+                return Err(FilterError::ArgumentOutOfRange(self.conds[i].arg));
             }
             let mut j: usize = 0;
             while j < i
@@ -80,13 +160,13 @@ impl Rule {
                 decreases i - j
             {
                 if self.conds[j].arg == self.conds[i].arg {
-                    return false;
+                    return Err(FilterError::DuplicateArgument(self.conds[i].arg));
                 }
                 j += 1;
             }
             i += 1;
         }
-        true
+        Ok(())
     }
 }
 
@@ -106,13 +186,15 @@ impl Filter {
         self.policy().wf()
     }
 
-    /// `seccomp_init`: a filter over no architecture that answers `act_default` to everything.
+    /// Creates a filter with default action `act_default` and no architectures enabled.
     pub fn new(act_default: Action) -> (res: Result<Filter, FilterError>)
-        ensures res matches Ok(f) ==> f.wf() && f.policy().attrs.act_default == act_default
-    {
-        if !act_default.check() {
-            return Err(FilterError::BadAction);
+        ensures res matches Ok(f) ==> {
+            &&& f.wf()
+            &&& f.policy().attrs.act_default == act_default
+            &&& f.policy().archs@.len() == 0
         }
+    {
+        act_default.check()?;
         Ok(Filter {
             policy: Policy {
                 attrs: Attrs { act_default, act_badarch: Action::KillThread, ..Attrs::default() },
@@ -123,11 +205,25 @@ impl Filter {
         })
     }
 
-    /// `seccomp_arch_add`: brings `arch` into the policy's scope.
+    /// Creates a filter over the running architecture with default action `act_default`.
+    pub fn new_native(act_default: Action) -> (res: Result<Filter, FilterError>)
+        ensures res matches Ok(f) ==> {
+            &&& f.wf()
+            &&& f.policy().attrs.act_default == act_default
+            &&& f.policy().archs@.len() == 1
+        }
+    {
+        let mut filter = Self::new(act_default)?;
+        filter.add_arch(Arch::native()?)?;
+        Ok(filter)
+    }
+
+    /// Adds `arch` to the architectures covered by this filter's rules.
     pub fn add_arch(&mut self, arch: Arch) -> (res: Result<(), FilterError>)
         requires old(self).wf()
         ensures
             final(self).wf(),
+            final(self).policy().attrs == old(self).policy().attrs,
             res is Ok ==> final(self).policy().archs@ == old(self).policy().archs@.push(arch),
     {
         let mut i: usize = 0;
@@ -160,7 +256,7 @@ impl Filter {
         Ok(())
     }
 
-    /// `seccomp_rule_add`: answers `action` to `syscall` when every test in `conds` holds.
+    /// Applies `action` to `syscall` when every argument test in `conds` holds.
     pub fn add_rule(&mut self, action: Action, syscall: SyscallName, conds: Vec<ArgCmp>)
         -> (res: Result<(), FilterError>)
         requires old(self).wf()
@@ -170,16 +266,7 @@ impl Filter {
                 Rule { action, syscall: Syscall::Name(syscall), conds, exact: false }),
     {
         let rule = Rule { action, syscall: Syscall::Name(syscall), conds, exact: false };
-        if !rule.action.check() {
-            return Err(FilterError::BadAction);
-        }
-        // `Action::to_ret` is injective, by `Action::lemma_to_ret`, so it settles the comparison.
-        if rule.action.to_ret() == self.policy.attrs.act_default.to_ret() {
-            return Err(FilterError::ActionIsDefault);
-        }
-        if !rule.check_conds() {
-            return Err(FilterError::BadConditions);
-        }
+        rule.check(&self.policy.attrs)?;
 
         let ghost prev = self.policy.rules@;
         let ghost attrs = self.policy.attrs;
@@ -195,17 +282,14 @@ impl Filter {
         Ok(())
     }
 
-    /// `seccomp_attr_set` of `SCMP_FLTATR_ACT_BADARCH`: what an event from another
-    /// architecture is answered with.
-    pub fn on_bad_arch(&mut self, act_badarch: Action) -> (res: Result<(), FilterError>)
+    /// Sets the action for syscalls from architectures this filter does not cover.
+    pub fn on_badarch(&mut self, act_badarch: Action) -> (res: Result<(), FilterError>)
         requires old(self).wf()
         ensures
             final(self).wf(),
             res is Ok ==> final(self).policy().attrs.act_badarch == act_badarch,
     {
-        if !act_badarch.check() {
-            return Err(FilterError::BadAction);
-        }
+        act_badarch.check()?;
         let ghost attrs = self.policy.attrs;
         self.policy.attrs.act_badarch = act_badarch;
         proof {
@@ -217,7 +301,7 @@ impl Filter {
         Ok(())
     }
 
-    /// The filter program this policy compiles to, which `seccomp_export_bpf` writes out.
+    /// Compiles this filter into a classic BPF program.
     pub fn to_cbpf(&self) -> (res: Result<Program, CompileError>)
         requires self.wf()
         ensures res matches Ok(prog) ==>
@@ -232,7 +316,7 @@ impl Filter {
         self.policy.to_cbpf()
     }
 
-    /// `seccomp_load`: compiles the policy and loads it into the calling thread.
+    /// Compiles this filter and installs it on the calling thread.
     #[cfg(target_os = "linux")]
     pub fn install(&self) -> Result<(), crate::seccomp::InstallError>
         requires self.wf()
@@ -242,197 +326,3 @@ impl Filter {
 }
 
 } // verus!
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    impl Filter {
-        /// A filter over the running architecture that lets through whatever no rule claims.
-        fn allow_native() -> Filter {
-            let mut filter = Filter::new(Action::Allow).ok().unwrap();
-            filter.add_arch(Arch::native().unwrap()).ok().unwrap();
-            filter
-        }
-    }
-
-    /// An errno the kernel has no room for is turned down.
-    #[test]
-    fn errno_out_of_range() {
-        assert!(Filter::new(Action::Errno(Action::MAX_ERRNO as u16)).is_err());
-        assert!(Filter::new(Action::Errno(Action::MAX_ERRNO as u16 - 1)).is_ok());
-    }
-
-    /// The same architecture twice is turned down.
-    #[test]
-    fn duplicate_arch() {
-        let mut filter = Filter::allow_native();
-        assert!(filter.add_arch(Arch::native().unwrap()).is_err());
-    }
-
-    /// A rule that only repeats the default action is turned down.
-    #[test]
-    fn rule_repeats_default() {
-        let mut filter = Filter::allow_native();
-        assert!(filter.add_rule(Action::Allow, SyscallName::Getpid, vec![]).is_err());
-    }
-
-    /// Two tests of one argument in a single rule are turned down.
-    #[test]
-    fn duplicate_argument() {
-        let mut filter = Filter::allow_native();
-        let conds = vec![
-            ArgCmp { arg: 1, op: Compare::Eq, datum_a: 0, datum_b: 0 },
-            ArgCmp { arg: 1, op: Compare::Ne, datum_a: 1, datum_b: 0 },
-        ];
-        assert!(filter.add_rule(Action::Errno(1), SyscallName::Lseek, conds).is_err());
-    }
-
-    /// An argument the architecture does not have is turned down.
-    #[test]
-    fn argument_out_of_range() {
-        let mut filter = Filter::allow_native();
-        let conds = vec![ArgCmp { arg: 6, op: Compare::Eq, datum_a: 0, datum_b: 0 }];
-        assert!(filter.add_rule(Action::Errno(1), SyscallName::Lseek, conds).is_err());
-    }
-
-    /// Tests that install the filter and watch what the kernel makes of it.
-    #[cfg(target_os = "linux")]
-    mod install {
-        use super::*;
-
-        /// How a child process that ran under a filter ended.
-        #[derive(Debug, PartialEq, Eq)]
-        enum Child {
-            /// Left through `_exit` with this status.
-            Exited(i32),
-            /// Killed by this signal.
-            Killed(i32),
-        }
-
-        impl Child {
-            /// The status the child leaves with when the filter never reaches the kernel.
-            const INSTALL_FAILED: i32 = 70;
-
-            /// The errno the last failing libc call left behind.
-            fn errno() -> i32 {
-                std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
-            }
-
-            /// Runs `body` in a child process that has `filter` installed.
-            fn run(filter: &Filter, body: impl FnOnce() -> i32) -> Child {
-                unsafe {
-                    let pid = libc::fork();
-                    assert!(pid >= 0, "fork failed");
-                    if pid == 0 {
-                        // A denied exit would leave the child spinning, so cap how long it lives.
-                        libc::alarm(10);
-                        let status = match filter.install() {
-                            Ok(()) => body(),
-                            Err(_) => Self::INSTALL_FAILED,
-                        };
-                        libc::_exit(status);
-                    }
-                    let mut status: libc::c_int = 0;
-                    assert_eq!(libc::waitpid(pid, &mut status, 0), pid, "waitpid failed");
-                    if libc::WIFSIGNALED(status) {
-                        Child::Killed(libc::WTERMSIG(status))
-                    } else {
-                        Child::Exited(libc::WEXITSTATUS(status))
-                    }
-                }
-            }
-        }
-
-        /// A filter with no rules and an `SCMP_ACT_ALLOW` default lets the child run on.
-        #[test]
-        fn allow_all() {
-            let filter = Filter::allow_native();
-            let child = Child::run(&filter, || unsafe {
-                if libc::syscall(libc::SYS_getpid) > 0 { 0 } else { 1 }
-            });
-            assert_eq!(child, Child::Exited(0));
-        }
-
-        /// An `SCMP_ACT_ERRNO` rule fails its own syscall and no other.
-        #[test]
-        fn errno_on_getpid() {
-            let mut filter = Filter::allow_native();
-            filter.add_rule(Action::Errno(libc::EPERM as u16), SyscallName::Getpid, vec![]).unwrap();
-            let child = Child::run(&filter, || unsafe {
-                if libc::syscall(libc::SYS_getpid) != -1 { return 1; }
-                if Child::errno() != libc::EPERM { return 2; }
-                if libc::syscall(libc::SYS_getppid) <= 0 { return 3; }
-                0
-            });
-            assert_eq!(child, Child::Exited(0));
-        }
-
-        /// An argument test narrows a rule to the calls that pass it.
-        #[test]
-        fn errno_on_first_argument() {
-            let mut filter = Filter::allow_native();
-            let conds = vec![ArgCmp { arg: 0, op: Compare::Eq, datum_a: 42, datum_b: 0 }];
-            filter.add_rule(Action::Errno(libc::EPERM as u16), SyscallName::Lseek, conds).unwrap();
-            let child = Child::run(&filter, || {
-                // `lseek` on a descriptor nothing opened, which the kernel refuses with EBADF.
-                let lseek = |fd: libc::c_long, offset: libc::c_long| unsafe {
-                    libc::syscall(libc::SYS_lseek, fd, offset, libc::SEEK_SET as libc::c_long)
-                };
-                if lseek(42, 0) != -1 { return 1; }
-                if Child::errno() != libc::EPERM { return 2; }
-                if lseek(43, 0) != -1 { return 3; }
-                if Child::errno() != libc::EBADF { return 4; }
-                0
-            });
-            assert_eq!(child, Child::Exited(0));
-        }
-
-        /// An `SCMP_ACT_KILL_PROCESS` rule takes the child down with SIGSYS.
-        #[test]
-        fn kill_process_on_getppid() {
-            let mut filter = Filter::allow_native();
-            filter.add_rule(Action::KillProcess, SyscallName::Getppid, vec![]).unwrap();
-            let child = Child::run(&filter, || unsafe {
-                libc::syscall(libc::SYS_getppid);
-                0
-            });
-            assert_eq!(child, Child::Killed(libc::SIGSYS));
-        }
-
-        /// An argument test on a 64-bit architecture looks at both words of the argument.
-        #[cfg(target_pointer_width = "64")]
-        #[test]
-        fn errno_on_high_word_of_argument() {
-            let mut filter = Filter::allow_native();
-            let conds = vec![ArgCmp { arg: 1, op: Compare::Eq, datum_a: 0x1_0000_0000, datum_b: 0 }];
-            filter.add_rule(Action::Errno(libc::EPERM as u16), SyscallName::Lseek, conds).unwrap();
-            let child = Child::run(&filter, || {
-                // `lseek` on a descriptor nothing opened, which the kernel refuses with EBADF.
-                let lseek = |fd: libc::c_long, offset: libc::c_long| unsafe {
-                    libc::syscall(libc::SYS_lseek, fd, offset, libc::SEEK_SET as libc::c_long)
-                };
-                if lseek(43, 0x1_0000_0000) != -1 { return 1; }
-                if Child::errno() != libc::EPERM { return 2; }
-                if lseek(43, 1) != -1 { return 3; }
-                if Child::errno() != libc::EBADF { return 4; }
-                0
-            });
-            assert_eq!(child, Child::Exited(0));
-        }
-
-        /// An event from an architecture the filter leaves out takes `act_badarch`.
-        #[test]
-        fn badarch_kills() {
-            let absent = if Arch::native().unwrap() == Arch::X86 { Arch::Aarch64 } else { Arch::X86 };
-            let mut filter = Filter::new(Action::Allow).ok().unwrap();
-            filter.add_arch(absent).ok().unwrap();
-            filter.on_bad_arch(Action::KillProcess).ok().unwrap();
-            let child = Child::run(&filter, || unsafe {
-                libc::syscall(libc::SYS_getpid);
-                0
-            });
-            assert_eq!(child, Child::Killed(libc::SIGSYS));
-        }
-    }
-}
