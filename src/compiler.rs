@@ -25,8 +25,8 @@ pub enum CompileError {
 }
 
 impl Policy {
-    /// Lowers the policy into a filter program.
-    pub fn lower(&self) -> (res: Result<Program, CompileError>)
+    /// Compiles the policy into a filter program.
+    pub fn to_cbpf(&self) -> (res: Result<Program, CompileError>)
         requires self.wf()
         ensures res matches Ok(prog) ==>
             // Compiled program is well-formed.
