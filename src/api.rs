@@ -30,9 +30,7 @@ pub enum Error {
 impl Arch {
     /// Returns the architecture this binary runs on, or an error if it is unsupported.
     pub fn native() -> Result<Arch, Error> {
-        if cfg!(all(target_arch = "x86_64", target_pointer_width = "32")) {
-            Ok(Arch::X32)
-        } else if cfg!(target_arch = "x86_64") {
+        if cfg!(all(target_arch = "x86_64", target_pointer_width = "64")) {
             Ok(Arch::X86_64)
         } else if cfg!(target_arch = "aarch64") {
             Ok(Arch::Aarch64)

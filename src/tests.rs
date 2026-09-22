@@ -9,7 +9,7 @@ fn native_constructor_adds_only_native() {
     let mut filter = Filter::new_native(Action::Errno(7)).unwrap();
     let native = Arch::native().unwrap();
     assert!(matches!(filter.add_arch(native), Err(Error::DuplicateArch)));
-    for arch in [Arch::X86, Arch::X86_64, Arch::X32, Arch::Arm, Arch::Aarch64] {
+    for arch in [Arch::X86, Arch::X86_64, Arch::Arm, Arch::Aarch64] {
         if arch != native {
             filter.add_arch(arch).unwrap();
         }
@@ -539,69 +539,6 @@ fn x86_64_unmatched_syscall_numbers_take_default() {
         0
     });
     assert_eq!(child, Child::Exited(0));
-}
-
-#[cfg(all(target_os = "linux", target_arch = "x86_64", target_pointer_width = "32"))]
-#[test]
-fn x32_guard_uses_unsigned_syscall_numbers() {
-    let mut filter = Filter::new_native(Action::Allow).unwrap();
-    filter.on_bad_arch(Action::Errno(libc::EACCES as u16)).unwrap();
-    let child = Child::run(&filter, || {
-        for (i, (nr, errno)) in [
-            (-1, libc::ENOSYS),
-            (-2, libc::ENOSYS),
-            (i32::MIN, libc::ENOSYS),
-            (0x4000_ffff, libc::ENOSYS),
-            (i32::MAX, libc::ENOSYS),
-            (0, libc::EACCES),
-            (0x3fff_ffff, libc::EACCES),
-        ]
-        .iter()
-        .enumerate()
-        {
-            let ret = unsafe {
-                libc::syscall(
-                    *nr as libc::c_long,
-                    -1 as libc::c_long,
-                    0 as libc::c_ulong,
-                    0 as libc::c_ulong,
-                )
-            };
-            if ret != -1 || Child::errno() != *errno {
-                return i as i32 + 1;
-            }
-        }
-        0
-    });
-    assert_eq!(child, Child::Exited(0));
-}
-
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-#[test]
-fn x86_64_and_x32_dispatch_in_either_order() {
-    for archs in [[Arch::X86_64, Arch::X32], [Arch::X32, Arch::X86_64]] {
-        let mut filter = Filter::new(Action::Allow).unwrap();
-        for arch in archs {
-            filter.add_arch(arch).unwrap();
-        }
-        filter
-            .add_rule(
-                Action::Errno(libc::EACCES as u16),
-                Syscall::Getpid,
-                vec![ArgCmp::eq(0, 7)],
-            )
-            .unwrap();
-        let child = Child::run(&filter, || {
-            if !Child::check_getpid([7, 0, 0, 0, 0, 0], true) {
-                return 1;
-            }
-            if !Child::check_getpid([8, 0, 0, 0, 0, 0], false) {
-                return 2;
-            }
-            0
-        });
-        assert_eq!(child, Child::Exited(0));
-    }
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86"))]

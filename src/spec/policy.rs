@@ -7,7 +7,7 @@ verus! {
 
 /// Architecture tokens `SCMP_ARCH_*` (excluding `SCMP_ARCH_NATIVE`).
 #[derive(Clone, Copy, PartialEq, Eq, Structural)]
-pub enum Arch { X86, X86_64, X32, Arm, Aarch64 }
+pub enum Arch { X86, X86_64, Arm, Aarch64 }
 
 /// Filter actions (`SCMP_ACT_*`).
 pub enum Action {
@@ -143,14 +143,11 @@ impl Arch {
 }
 
 impl Event {
-    /// `nr >= X32_SYSCALL_BIT` (`src/arch-x32.h`) as the BPF's unsigned comparison sees it.
-    pub open spec fn is_x32(self) -> bool { self.nr < 0 || self.nr >= 0x4000_0000 }
-
     /// `arch_def.token_bpf`: what the kernel reports in `seccomp_data.arch` (`linux/audit.h`).
     pub open spec fn matches_arch(self, arch: Arch) -> bool {
         match arch {
             Arch::X86 => self.arch == 0x4000_0003,
-            Arch::X86_64 | Arch::X32 => self.arch == 0xC000_003E,
+            Arch::X86_64 => self.arch == 0xC000_003E,
             Arch::Arm => self.arch == 0x4000_0028,
             Arch::Aarch64 => self.arch == 0xC000_00B7,
         }
@@ -270,12 +267,7 @@ impl Rule {
 
 impl Policy {
     pub open spec fn is_active_arch(self, arch: Arch, ev: Event) -> bool {
-        &&& self.archs@.contains(arch)
-        &&& ev.matches_arch(arch)
-        &&& arch == Arch::X32 ==> ev.is_x32()
-        // To avoid an ambiguity where having skip rules in both x86_64 and x32
-        // would potentially allow eval to accept two different actions.
-        &&& Some(ev.nr) == Syscall::Skip.nr(arch) && arch == Arch::X86_64 ==> !self.archs@.contains(Arch::X32)
+        self.archs@.contains(arch) && ev.matches_arch(arch)
     }
 
     /// Defines whether evaluating the policy on event `ev`
