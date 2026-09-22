@@ -73,7 +73,7 @@ impl Instr {
     const BPF_TAX: u16 = 0x00;
     const BPF_TXA: u16 = 0x80;
 
-    pub fn assemble(&self) -> SockFilter {
+    fn assemble(&self) -> SockFilter {
         let (code, jt, jf, k) = match self {
             Instr::LdAbs(k) => (Self::BPF_LD | Self::BPF_W | Self::BPF_ABS, 0, 0, *k),
             Instr::LdLen => (Self::BPF_LD | Self::BPF_W | Self::BPF_LEN, 0, 0, 0),

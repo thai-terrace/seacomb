@@ -17,7 +17,7 @@ impl Arch {
     pub const TOKEN_AARCH64: u32 = 0xC000_00B7;
 
     /// Executable version of [`Arch::token`].
-    pub fn to_token(self) -> (res: u32)
+    fn to_token(self) -> (res: u32)
         ensures res == self.token()
     {
         match self {

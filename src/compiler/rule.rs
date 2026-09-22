@@ -74,7 +74,7 @@ impl Action {
 
     /// Executable version of [`Action::spec_to_ret`].
     #[verifier::when_used_as_spec(spec_to_ret)]
-    pub fn to_ret(&self) -> (res: u32)
+    pub(super) fn to_ret(&self) -> (res: u32)
         ensures res == self.spec_to_ret()
     {
         match self {

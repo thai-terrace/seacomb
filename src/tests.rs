@@ -1,6 +1,6 @@
 //! Tests of filter construction and native seccomp enforcement.
 
-use crate::api::{Error, Filter};
+use crate::{Error, Filter};
 use crate::spec::policy::{Action, Arch, ArgCmp, Rule, Syscall};
 
 #[test]
@@ -24,7 +24,7 @@ fn seven_conditions_compile() {
     let mut filter = Filter::new_native(Action::Allow).unwrap();
     let conds = (0..7).map(|arg| ArgCmp::eq(arg % 6, 0)).collect();
     filter.add_rule(Action::Errno(1), Syscall::Getpid, conds).unwrap();
-    assert!(filter.to_cbpf().is_ok());
+    assert!(filter.policy.to_cbpf().is_ok());
 }
 
 #[test]
@@ -67,15 +67,12 @@ fn oversized_program_compiles() {
             .add_rule(Action::Errno(13), Syscall::Getpid, vec![ArgCmp::eq(0, val)])
             .unwrap();
     }
-    let program = filter.to_cbpf().unwrap();
+    let program = filter.policy.to_cbpf().unwrap();
     assert!(program.instrs.len() > 4096);
     #[cfg(target_os = "linux")]
     assert_eq!(Child::run_unfiltered(|| {
         if !matches!(filter.install(), Err(Error::FilterTooLarge)) {
             return 1;
-        }
-        if !matches!(program.install(&filter), Err(Error::FilterTooLarge)) {
-            return 2;
         }
         0
     }), Child::Exited(0));
@@ -84,22 +81,27 @@ fn oversized_program_compiles() {
 #[cfg(target_os = "linux")]
 #[test]
 fn installation_checks_instruction_limit_before_side_effects() {
-    use crate::spec::cbpf::{Instr, Program, RetVal};
-
-    // Also check a length that would wrap to 1 when cast to sock_fprog.len.
-    for len in [4096, 4097, 65537] {
-        let child = Child::run_unfiltered(|| {
-            let filter = Filter::new(Action::Allow).unwrap();
-            let program = Program {
-                instrs: (0..len)
-                    .map(|_| Instr::Ret(RetVal::K(Action::Allow.to_ret())))
-                    .collect(),
+    // Use a fixed architecture so the emitted lengths are host-independent.
+    // The final case would wrap to 1 when cast to sock_fprog.len.
+    for (len, rule_count, condition_count) in [(4096, 1362, 1), (4097, 1361, 2), (65537, 21841, 2)] {
+        let mut filter = Filter::new(Action::Allow).unwrap();
+        filter.add_arch(Arch::Aarch64).unwrap();
+        filter.on_bad_arch(Action::Allow).unwrap();
+        for i in 0..rule_count {
+            let conds = if i == 0 {
+                (0..condition_count).map(|_| ArgCmp::eq(0, 0)).collect()
+            } else {
+                vec![]
             };
+            filter.add_rule(Action::Allow, Syscall::Getpid, conds).unwrap();
+        }
+        assert_eq!(filter.policy.to_cbpf().unwrap().instrs.len(), len);
+        let child = Child::run_unfiltered(|| {
             let before = unsafe { libc::prctl(libc::PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) };
             if before < 0 {
                 return 1;
             }
-            let result = program.install(&filter);
+            let result = filter.install();
             if len == 4096 {
                 return if result.is_ok() { 0 } else { 2 };
             }
@@ -747,7 +749,7 @@ fn long_rule_chains_preserve_matches_and_fallthrough() {
             )
             .unwrap();
     }
-    assert!(filter.to_cbpf().ok().unwrap().instrs.len() > 255);
+    assert!(filter.policy.to_cbpf().ok().unwrap().instrs.len() > 255);
     let child = Child::run(&filter, || {
         for (i, val) in [0, 50, 99, 100].iter().enumerate() {
             if !Child::check_getpid([*val, 0, 0, 0, 0, 0], *val < 100) {
@@ -926,7 +928,7 @@ fn repeated_argument_conditions_compile() {
     let mut filter = Filter::new_native(Action::Allow).unwrap();
     let conds = vec![ArgCmp::eq(1, 0), ArgCmp::ne(1, 1)];
     filter.add_rule(Action::Errno(1), Syscall::Lseek, conds).unwrap();
-    assert!(filter.to_cbpf().is_ok());
+    assert!(filter.policy.to_cbpf().is_ok());
 }
 
 /// An argument the architecture does not have is turned down.
