@@ -11,11 +11,12 @@ from pathlib import Path
 
 TESTS = Path(__file__).resolve().parent
 ROOT = TESTS.parent
+# musl targets link statically with the toolchain's rust-lld, so no cross linker is needed.
 TARGETS = {
-    "x86_64": ("x86_64", "x86_64-unknown-linux-gnu"),
-    "i686": ("x86_64", "i686-unknown-linux-gnu"),
-    "aarch64": ("aarch64", "aarch64-unknown-linux-gnu"),
-    "armv7l": ("armv7l", "armv7-unknown-linux-gnueabihf"),
+    "x86_64": ("x86_64", "x86_64-unknown-linux-musl"),
+    "i686": ("x86_64", "i686-unknown-linux-musl"),
+    "aarch64": ("aarch64", "aarch64-unknown-linux-musl"),
+    "armv7l": ("armv7l", "armv7-unknown-linux-musleabihf"),
 }
 
 
@@ -32,7 +33,8 @@ def lima(*args, **kwargs):
 
 
 def build(target):
-    output = run("cargo-zigbuild", "test", "--no-run", "--locked", "--target", target,
+    output = run("cargo", "test", "--no-run", "--locked", "--target", target,
+                 "--config", f'target.{target}.linker="rust-lld"',
                  "--target-dir", str(ROOT / "target/cross-tests"),
                  "--message-format=json-render-diagnostics", capture=True)
     artifacts = [json.loads(line) for line in output.splitlines() if line.startswith("{")]
@@ -46,7 +48,6 @@ def build(target):
 parser = argparse.ArgumentParser(description="Build tests on the host and run them in Lima.")
 parser.add_argument("arch", nargs="?", default="all", choices=["all", *TARGETS])
 args = parser.parse_args()
-os.environ["PATH"] = f"{ROOT / 'target/cross-tools/bin'}{os.pathsep}{os.environ['PATH']}"
 host = {"arm64": "aarch64", "AMD64": "x86_64"}.get(platform.machine(), platform.machine())
 groups = {}
 for arch in TARGETS if args.arch == "all" else [args.arch]:
