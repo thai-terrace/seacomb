@@ -59,11 +59,13 @@ macro_rules! syscalls {
 syscalls! {
     /// Linux syscall identifiers.
     ///
-    /// Extracted from:
-    /// - [x86 table](https://github.com/torvalds/linux/blob/v6.17/arch/x86/entry/syscalls/syscall_32.tbl)
-    /// - [x86_64 table](https://github.com/torvalds/linux/blob/v6.17/arch/x86/entry/syscalls/syscall_64.tbl)
-    /// - [ARM table](https://github.com/torvalds/linux/blob/v6.17/arch/arm/tools/syscall.tbl)
-    /// - [AArch64 table](https://github.com/torvalds/linux/blob/v6.17/scripts/syscall.tbl)
+    /// Extracted from Linux v7.0:
+    /// - [x86 table](https://github.com/torvalds/linux/blob/v7.0/arch/x86/entry/syscalls/syscall_32.tbl)
+    /// - [x86_64 table](https://github.com/torvalds/linux/blob/v7.0/arch/x86/entry/syscalls/syscall_64.tbl)
+    /// - [ARM table](https://github.com/torvalds/linux/blob/v7.0/arch/arm/tools/syscall.tbl)
+    ///   and [ARM-specific numbers](https://github.com/torvalds/linux/blob/v7.0/arch/arm/include/uapi/asm/unistd.h)
+    /// - [AArch64 table](https://github.com/torvalds/linux/blob/v7.0/scripts/syscall.tbl),
+    ///   with [ABI selection](https://github.com/torvalds/linux/blob/v7.0/arch/arm64/kernel/Makefile.syscalls)
     pub enum Syscall {
         #[nr(Arch::X86_64, 43)]
         #[nr(Arch::Arm, 285)]
