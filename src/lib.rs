@@ -3,6 +3,7 @@
 mod asm;
 mod compiler;
 pub mod spec;
+pub mod prop;
 
 #[cfg(test)]
 mod tests;
