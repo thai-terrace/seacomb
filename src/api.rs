@@ -126,9 +126,7 @@ pub struct Filter {
     pub ctl_tsync: bool,
     /// Request logging of all filter actions except `Allow`.
     pub ctl_log: bool,
-    // TODO: notification related flags.
-    // pub api_sysrawrc: bool,
-    // pub ctl_waitkill: bool,
+    // TODO: Support `ctl_waitkill`
 }
 
 impl Filter {
@@ -351,7 +349,7 @@ impl Program {
             }
         }
 
-        let mut instrs: Vec<_> = self.assemble();
+        let mut instrs = self.assemble();
 
         // The kernel copies the program out of `sock_fprog` before it returns, so the
         // buffer only has to outlive the call.
