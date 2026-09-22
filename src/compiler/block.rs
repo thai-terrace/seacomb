@@ -9,13 +9,6 @@ use super::builder::{Builder, Label};
 verus! {
 
 impl Arch {
-    /// `AUDIT_ARCH_*` in `linux/audit.h`: what the kernel reports in
-    /// `seccomp_data.arch`.
-    pub const TOKEN_X86: u32 = 0x4000_0003;
-    pub const TOKEN_X86_64: u32 = 0xC000_003E;
-    pub const TOKEN_ARM: u32 = 0x4000_0028;
-    pub const TOKEN_AARCH64: u32 = 0xC000_00B7;
-
     /// Executable version of [`Arch::token`].
     fn to_token(self) -> (res: u32)
         ensures res == self.token()

@@ -129,6 +129,12 @@ pub enum SyscallMatch {
 }
 
 impl Arch {
+    // `AUDIT_ARCH_*` in `linux/audit.h`.
+    pub const TOKEN_X86: u32 = 0x4000_0003;
+    pub const TOKEN_X86_64: u32 = 0xC000_003E;
+    pub const TOKEN_ARM: u32 = 0x4000_0028;
+    pub const TOKEN_AARCH64: u32 = 0xC000_00B7;
+
     /// Mask for the syscall number and arguments, depending on the architecture word size.
     pub open spec fn mask(self) -> u64 {
         if self == Arch::X86_64 || self == Arch::Aarch64 {
@@ -141,10 +147,10 @@ impl Arch {
     /// Returns the arch token reported by the kernel (`linux/audit.h`).
     pub open spec fn token(self) -> u32 {
         match self {
-            Arch::X86 => 0x4000_0003,
-            Arch::X86_64 => 0xC000_003E,
-            Arch::Arm => 0x4000_0028,
-            Arch::Aarch64 => 0xC000_00B7,
+            Arch::X86 => Self::TOKEN_X86,
+            Arch::X86_64 => Self::TOKEN_X86_64,
+            Arch::Arm => Self::TOKEN_ARM,
+            Arch::Aarch64 => Self::TOKEN_AARCH64,
         }
     }
 }
