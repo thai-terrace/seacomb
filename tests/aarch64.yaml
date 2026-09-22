@@ -1,0 +1,5 @@
+base:
+- common.yaml
+- template:_images/debian-13
+
+arch: aarch64

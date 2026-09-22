@@ -1,0 +1,15 @@
+# One kernel runs both x86_64 and i686 test binaries.
+base:
+- common.yaml
+- template:_images/debian-13
+
+arch: x86_64
+
+provision:
+- mode: system
+  script: |
+    #!/bin/sh
+    set -eu
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends libc6-i386 lib32gcc-s1

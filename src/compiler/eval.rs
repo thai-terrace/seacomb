@@ -94,7 +94,7 @@ impl Policy {
         if i >= self.archs@.len() {
             self.act_bad_arch
         } else if ev.matches_arch(self.archs@[i]) {
-            self.dispatch(self.archs@[i], ev, 8, self.rules@.len() as int)
+            self.dispatch(self.archs@[i], ev, 7, self.rules@.len() as int)
         } else {
             self.blocks(ev, i + 1)
         }
@@ -102,7 +102,7 @@ impl Policy {
 
     /// Dispatch selects the greatest matching precedence and then the greatest rule index.
     pub(super) proof fn lemma_dispatch(self, arch: Arch, ev: Event, priority: int, i: int)
-        requires -1 <= priority <= 8, 0 <= i <= self.rules@.len()
+        requires -1 <= priority <= 7, 0 <= i <= self.rules@.len()
         ensures
             (exists |j: int| {
                 &&& self.included(j, priority, i)
@@ -147,22 +147,22 @@ impl Policy {
             }
         } else if ev.matches_arch(self.archs@[i]) {
             let arch = self.archs@[i];
-            let act = self.dispatch(arch, ev, 8, self.rules@.len() as int);
+            let act = self.dispatch(arch, ev, 7, self.rules@.len() as int);
             assert(self.archs@.contains(arch));
             assert(self.is_active_arch(arch, ev));
-            self.lemma_dispatch(arch, ev, 8, self.rules@.len() as int);
+            self.lemma_dispatch(arch, ev, 7, self.rules@.len() as int);
             assert forall |j: int| 0 <= j < self.rules@.len() implies
-                self.included(j, 8, self.rules@.len() as int) by {
-                assert(self.rules@[j].action.precedence() <= 8);
+                self.included(j, 7, self.rules@.len() as int) by {
+                assert(self.rules@[j].action.precedence() <= 7);
             }
             if exists |j: int| 0 <= j < self.rules@.len()
                 && #[trigger] self.rules@[j].eval(arch, ev)
                 && self.rules@[j].action == act {
                 let j = choose |j: int| {
-                    &&& self.included(j, 8, self.rules@.len() as int)
+                    &&& self.included(j, 7, self.rules@.len() as int)
                     &&& #[trigger] self.rules@[j].eval(arch, ev)
                     &&& self.rules@[j].action == act
-                    &&& forall |k: int| self.included(k, 8, self.rules@.len() as int)
+                    &&& forall |k: int| self.included(k, 7, self.rules@.len() as int)
                         && #[trigger] self.rules@[k].eval(arch, ev) ==> {
                             &&& self.rules@[k].action.precedence() <= self.rules@[j].action.precedence()
                             &&& self.rules@[k].action.precedence() == self.rules@[j].action.precedence() ==> k <= j
@@ -173,7 +173,7 @@ impl Policy {
                         ||| self.rules@[k].action.precedence() < act.precedence()
                         ||| k < j && self.rules@[k].action.precedence() == act.precedence()
                     } by {
-                    assert(self.included(k, 8, self.rules@.len() as int));
+                    assert(self.included(k, 7, self.rules@.len() as int));
                 }
                 assert(self.eval(ev, act));
             } else {
@@ -223,39 +223,21 @@ impl Policy {
         assert(self.wins(ev, b, j));
     }
 
-    /// An accepted action comes from a winning rule or an applicable fallback.
-    pub(super) proof fn lemma_eval_cases(self, ev: Event, act: Action)
-        requires self.wf(), self.eval(ev, act)
-        ensures
-            (exists |a: Arch, i: int| #[trigger] self.wins(ev, a, i) && self.rules@[i].action == act)
-            || (act == self.act_bad_arch && forall |a: Arch| !self.is_active_arch(a, ev))
-            || (act == self.act_no_match && exists |a: Arch| self.is_active_arch(a, ev)),
-    {
-        if exists |a: Arch, i: int| self.is_active_arch(a, ev)
-            && 0 <= i < self.rules@.len() && #[trigger] self.rules@[i].eval(a, ev) {
-            let (a, i) = choose |a: Arch, i: int| self.is_active_arch(a, ev)
-                && 0 <= i < self.rules@.len() && #[trigger] self.rules@[i].eval(a, ev);
-            self.lemma_eval_witness(ev, act, a, i);
-        }
-    }
-
     /// Two accepted actions for an event are equal.
     pub(super) proof fn lemma_eval_unique(self, ev: Event, act1: Action, act2: Action)
         requires self.wf(), self.eval(ev, act1), self.eval(ev, act2)
         ensures act1 == act2
     {
-        self.lemma_eval_cases(ev, act1);
-        self.lemma_eval_cases(ev, act2);
-        if exists |a: Arch, i: int| #[trigger] self.wins(ev, a, i) && self.rules@[i].action == act1 {
-            let (a, i) = choose |a: Arch, i: int| #[trigger] self.wins(ev, a, i) && self.rules@[i].action == act1;
+        if exists |a: Arch, i: int| self.is_active_arch(a, ev)
+            && 0 <= i < self.rules@.len() && #[trigger] self.rules@[i].eval(a, ev) {
+            let (a, i) = choose |a: Arch, i: int| self.is_active_arch(a, ev)
+                && 0 <= i < self.rules@.len() && #[trigger] self.rules@[i].eval(a, ev);
+            self.lemma_eval_witness(ev, act1, a, i);
             self.lemma_eval_witness(ev, act2, a, i);
+            let (a, i) = choose |a: Arch, i: int| #[trigger] self.wins(ev, a, i) && self.rules@[i].action == act1;
             let (b, j) = choose |b: Arch, j: int| #[trigger] self.wins(ev, b, j) && self.rules@[j].action == act2;
             assert(a == b);
             assert(i == j);
-        } else if exists |b: Arch, j: int| #[trigger] self.wins(ev, b, j) && self.rules@[j].action == act2 {
-            let (b, j) = choose |b: Arch, j: int| #[trigger] self.wins(ev, b, j) && self.rules@[j].action == act2;
-            self.lemma_eval_witness(ev, act1, b, j);
-            assert(false);
         }
     }
 }

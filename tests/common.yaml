@@ -1,0 +1,5 @@
+# Test guests only execute binaries copied from the host.
+plain: true
+cpus: 2
+memory: "1GiB"
+disk: "5GiB"

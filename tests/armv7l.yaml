@@ -1,0 +1,7 @@
+# Apple Silicon cannot execute AArch32, so ARMv7 needs an emulated guest.
+# Ubuntu provides an armhf cloud image; Debian does not.
+base:
+- common.yaml
+- template:_images/ubuntu-24.04
+
+arch: armv7l

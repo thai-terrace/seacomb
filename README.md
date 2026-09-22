@@ -2,36 +2,24 @@
 
 Formally verified, `libseccomp`-compatible Rust library for enforcing seccomp policies.
 
+Supported architectures: x86, x86_64, ARM, and AArch64.
+
 ```
 cargo verus verify/build
 ```
 
 # Testing
 
-Dependencies: `qemu` and `lima-additional-guestagents`.
-
-```
-ARCH=x86_64
-TARGET=x86_64-unknown-linux-gnu
-
-limactl start --tty=false --name=seacomb-$ARCH lima/$ARCH.yaml
-limactl shell seacomb-$ARCH cargo test --target $TARGET
-
-# Optional clean up
-limactl delete -f seacomb-$ARCH
+Install dependencies: Lima, QEMU, `cargo-zigbuild`, and Zig.
+```sh
+# For macOS
+brew install lima qemu
+python3 -m venv target/cross-tools
+target/cross-tools/bin/pip install cargo-zigbuild==0.23.4 ziglang==0.16.0
 ```
 
-Supported architectures:
-| `ARCH`    | `TARGET`                        |
-| --------- | ------------------------------- |
-| `x86_64`  | `x86_64-unknown-linux-gnu`      |
-| `x86_64`  | `i686-unknown-linux-gnu`        |
-| `x32`     | `x86_64-unknown-linux-gnux32`   |
-| `aarch64` | `aarch64-unknown-linux-gnu`     |
-| `armv7l`  | `armv7-unknown-linux-gnueabihf` |
-
-NOTE: `x32` takes one restart before the first test run, for the guest to come up on
-the kernel command line that turns the ABI on:
-```
-limactl stop seacomb-x32 && limactl start --tty=false seacomb-x32
+To run all tests on one or all supported architectures:
+```sh
+python3 tests/run.py
+python3 tests/run.py aarch64
 ```
