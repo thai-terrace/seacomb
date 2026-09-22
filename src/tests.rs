@@ -1,7 +1,8 @@
 //! Tests of filter construction and native seccomp enforcement.
 
 use crate::{Error, Filter};
-use crate::spec::policy::{Action, Arch, ArgCmp, Rule, Syscall};
+use crate::spec::policy::{Action, Arch, ArgCmp, Rule};
+use crate::spec::syscall::Syscall;
 
 #[test]
 fn native_constructor_adds_only_native() {

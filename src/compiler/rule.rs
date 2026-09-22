@@ -34,7 +34,7 @@ impl Action {
     }
 
     /// The filter return value that makes the kernel take this action.
-    pub open spec fn spec_to_ret(&self) -> u32 {
+    pub open spec fn to_ret(&self) -> u32 {
         match self {
             Action::KillProcess => Self::RET_KILL_PROCESS,
             Action::KillThread => Self::RET_KILL_THREAD,
@@ -47,9 +47,9 @@ impl Action {
         }
     }
 
-    /// [`Action::spec_to_ret`] is the inverse of [`Action::from_ret`].
+    /// [`Action::to_ret`] is the inverse of [`Action::from_ret`].
     pub broadcast proof fn lemma_to_ret(&self)
-        ensures Action::from_ret(#[trigger] self.spec_to_ret()) == *self
+        ensures Action::from_ret(#[trigger] self.to_ret()) == *self
     {
         let data = match self {
             Action::Trap(data) => *data,
@@ -72,10 +72,10 @@ impl Action {
         assert((0x7ff0_0000u32 | d) & 0x0000_ffffu32 == d) by (bit_vector) requires d < 0x1_0000;
     }
 
-    /// Executable version of [`Action::spec_to_ret`].
-    #[verifier::when_used_as_spec(spec_to_ret)]
-    pub(super) fn to_ret(&self) -> (res: u32)
-        ensures res == self.spec_to_ret()
+    /// Executable version of [`Action::to_ret`].
+    #[verifier::when_used_as_spec(to_ret)]
+    pub(super) fn exec_to_ret(&self) -> (res: u32)
+        ensures res == self.to_ret()
     {
         match self {
             Action::KillProcess => Self::RET_KILL_PROCESS,
@@ -1073,7 +1073,7 @@ impl Rule {
     {
         let end = b.label();
         let ghost base = b.rev@;
-        b.emit(Instr::Ret(RetVal::K(self.action.to_ret())));
+        b.emit(Instr::Ret(RetVal::K(self.action.exec_to_ret())));
         let ghost r_ret = b.rev@;
         proof {
             Builder::lemma_ret(r_ret, self.action.to_ret());

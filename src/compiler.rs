@@ -25,14 +25,16 @@ impl Policy {
     /// Compiles the policy into a filter program.
     pub(crate) fn to_cbpf(&self) -> (res: Result<Program, CompileError>)
         requires self.wf()
-        ensures res matches Ok(prog) ==>
+        ensures res matches Ok(prog) ==> {
             // Compiled program is well-formed.
-            prog.wf() &&
-            // Compiled program runs error-free and produces an action accepted by the policy.
-            forall |data: &[u8]| #[trigger] Event::parse(data) matches Some(ev) ==> {
-                &&& prog.eval(data) matches Outcome::Return(ret)
-                &&& self.eval(ev, Action::from_ret(ret))
-            }
+            &&& prog.wf()
+            // Compiled program implements the policy on well-formed events.
+            &&& forall |data: &[u8]| #[trigger] Event::parse(data) matches Some(ev) ==>
+                exists |act: Action| {
+                    &&& #[trigger] self.eval(ev, act)
+                    &&& prog.eval(data) == Outcome::Return(act.to_ret())
+                }
+        }
     {
         let mut b = Builder::new();
 
@@ -40,7 +42,7 @@ impl Policy {
         // policy leaves out of scope.
         //
         //      ret #act_bad_arch
-        b.emit(Instr::Ret(RetVal::K(self.act_bad_arch.to_ret())));
+        b.emit(Instr::Ret(RetVal::K(self.act_bad_arch.exec_to_ret())));
 
         proof { Builder::lemma_ret(b.rev@, self.act_bad_arch.to_ret()); }
 
@@ -80,10 +82,11 @@ impl Policy {
         let prog = b.finish();
         proof {
             gb.lemma_wf(prog);
-            assert forall |data: &[u8]| #[trigger] Event::parse(data) is Some implies {
-                &&& prog.eval(data) matches Outcome::Return(ret)
-                &&& self.eval(Event::of(data), Action::from_ret(ret))
-            } by {
+            assert forall |data: &[u8]| #[trigger] Event::parse(data) is Some implies
+                exists |act: Action| {
+                    &&& #[trigger] self.eval(Event::of(data), act)
+                    &&& prog.eval(data) == Outcome::Return(act.to_ret())
+                } by {
                 let act = self.blocks(Event::of(data), 0);
                 prog.lemma_run(data);
                 assert(prog.instrs@.len() == gb.rev@.len());
@@ -91,8 +94,8 @@ impl Policy {
                 assert(Builder::extends(gb.rev@, gb.rev@));
                 assert(Builder::returns(gb.rev@, data, gb.rev@.len(), 0, act.to_ret()));
                 assert(Builder::run(gb.rev@, data, gb.rev@.len(), 0) == Outcome::Return(act.to_ret()));
-                act.lemma_to_ret();
                 self.lemma_blocks(Event::of(data), 0);
+                assert(prog.eval(data) == Outcome::Return(act.to_ret()));
             }
         }
         Ok(prog)
