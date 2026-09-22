@@ -123,12 +123,17 @@ def write_initramfs(binary, path):
     path.write_bytes(archive)
 
 
-def accelerators(arch):
-    """Returns QEMU's -accel flags, using the host hypervisor when `arch` is native."""
+def accelerator(arch):
+    """Returns QEMU's -accel flag, using the host hypervisor when `arch` is native and it has one."""
     host = {"arm64": "aarch64", "AMD64": "x86_64"}.get(platform.machine(), platform.machine())
-    hypervisor = {"Darwin": "hvf", "Linux": "kvm"}.get(platform.system())
-    if arch == host and hypervisor:
-        return ["-accel", hypervisor, "-accel", "tcg"]
+    if arch == host and platform.system() == "Darwin":
+        # QEMU aborts rather than trying the next -accel when HVF is missing, as on GitHub's
+        # macOS runners, where this sysctl is 0 or absent.
+        probe = subprocess.run(["sysctl", "-n", "kern.hv_support"], capture_output=True, text=True)
+        if probe.stdout.strip() == "1":
+            return ["-accel", "hvf"]
+    if arch == host and platform.system() == "Linux" and os.access("/dev/kvm", os.R_OK | os.W_OK):
+        return ["-accel", "kvm"]
     return ["-accel", "tcg"]
 
 
@@ -138,7 +143,7 @@ def boot(arch, binary, scratch):
     initrd = scratch / f"{Path(binary).name}.cpio"
     write_initramfs(binary, initrd)
     command = [
-        *machine.qemu, *accelerators(arch), "-m", "512M", "-smp", "2",
+        *machine.qemu, *accelerator(arch), "-m", "512M", "-smp", "2",
         "-nodefaults", "-display", "none", "-serial", "stdio",
         "-kernel", str(fetch_kernel(machine)), "-initrd", str(initrd),
         # Log only emergencies, and reboot at once on a panic, which

@@ -49,3 +49,24 @@ jobs:
         run: brew install qemu
       - name: Test all architectures
         run: python3 tests/run.py
+
+  proofs:
+    name: Verify proofs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      VERUS_VERSION: 0.2026.09.20.aef82ed
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Verus
+        run: |
+          curl -fL --retry 3 -o "$RUNNER_TEMP/verus.zip" \
+            "https://github.com/verus-lang/verus/releases/download/release/${VERUS_VERSION}/verus-${VERUS_VERSION}-x86-linux.zip"
+          unzip -q "$RUNNER_TEMP/verus.zip" -d "$RUNNER_TEMP"
+          chmod +x "$RUNNER_TEMP/verus-x86-linux/"{verus,cargo-verus,z3}
+          echo "$RUNNER_TEMP/verus-x86-linux" >> "$GITHUB_PATH"
+          rustup component add rustc-dev llvm-tools
+
+      - name: Verify
+        run: cargo verus verify --locked --check-toolchain
