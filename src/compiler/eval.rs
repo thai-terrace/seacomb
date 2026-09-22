@@ -93,7 +93,7 @@ impl Policy {
     {
         if i >= self.archs@.len() {
             self.act_bad_arch
-        } else if ev.matches_arch(self.archs@[i]) {
+        } else if ev.arch == self.archs@[i].token() {
             self.dispatch(self.archs@[i], ev, 7, self.rules@.len() as int)
         } else {
             self.blocks(ev, i + 1)
@@ -133,7 +133,7 @@ impl Policy {
         requires
             self.wf(),
             0 <= i <= self.archs@.len(),
-            forall |j: int| 0 <= j < i ==> !ev.matches_arch(#[trigger] self.archs@[j]),
+            forall |j: int| 0 <= j < i ==> ev.arch != (#[trigger] self.archs@[j]).token(),
         ensures self.eval(ev, self.blocks(ev, i))
         decreases self.archs@.len() - i
     {
@@ -141,11 +141,11 @@ impl Policy {
             assert forall |a: Arch| !self.is_active_arch(a, ev) by {
                 if self.is_active_arch(a, ev) {
                     let j = choose |j: int| 0 <= j < self.archs@.len() && self.archs@[j] == a;
-                    assert(ev.matches_arch(self.archs@[j]));
+                    assert(ev.arch == self.archs@[j].token());
                     assert(false);
                 }
             }
-        } else if ev.matches_arch(self.archs@[i]) {
+        } else if ev.arch == self.archs@[i].token() {
             let arch = self.archs@[i];
             let act = self.dispatch(arch, ev, 7, self.rules@.len() as int);
             assert(self.archs@.contains(arch));

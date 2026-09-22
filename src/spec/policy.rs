@@ -3,6 +3,7 @@
 use vstd::prelude::*;
 pub use super::syscall::*;
 
+// Syntax
 verus! {
 
 /// Architecture tokens `SCMP_ARCH_*` (excluding `SCMP_ARCH_NATIVE`).
@@ -97,15 +98,11 @@ impl Rule {
 }
 
 impl Policy {
-    pub open spec fn archs_wf(self) -> bool {
-        forall |i: int, j: int| #![trigger self.archs@[i], self.archs@[j]]
-            0 <= i < j < self.archs@.len() ==> self.archs@[i] != self.archs@[j]
-    }
-
     pub open spec fn wf(self) -> bool {
         &&& self.act_no_match.wf()
         &&& self.act_bad_arch.wf()
-        &&& self.archs_wf()
+        &&& forall |i: int, j: int| #![trigger self.archs@[i], self.archs@[j]]
+                0 <= i < j < self.archs@.len() ==> self.archs@[i] != self.archs@[j]
         &&& forall |i: int| #![trigger self.rules@[i]]
                 0 <= i < self.rules@.len() ==> self.rules@[i].wf()
     }
@@ -140,19 +137,19 @@ impl Arch {
             0xFFFF_FFFF
         }
     }
+
+    /// Returns the arch token reported by the kernel (`linux/audit.h`).
+    pub open spec fn token(self) -> u32 {
+        match self {
+            Arch::X86 => 0x4000_0003,
+            Arch::X86_64 => 0xC000_003E,
+            Arch::Arm => 0x4000_0028,
+            Arch::Aarch64 => 0xC000_00B7,
+        }
+    }
 }
 
 impl Event {
-    /// `arch_def.token_bpf`: what the kernel reports in `seccomp_data.arch` (`linux/audit.h`).
-    pub open spec fn matches_arch(self, arch: Arch) -> bool {
-        match arch {
-            Arch::X86 => self.arch == 0x4000_0003,
-            Arch::X86_64 => self.arch == 0xC000_003E,
-            Arch::Arm => self.arch == 0x4000_0028,
-            Arch::Aarch64 => self.arch == 0xC000_00B7,
-        }
-    }
-
     /// Whether the syscall name matches the event and if it is an exact match or a multiplexed match.
     pub open spec fn matches_syscall(self, arch: Arch, name: Syscall) -> SyscallMatch {
         if name.nr(arch) == Some(self.nr) {
@@ -267,7 +264,7 @@ impl Rule {
 
 impl Policy {
     pub open spec fn is_active_arch(self, arch: Arch, ev: Event) -> bool {
-        self.archs@.contains(arch) && ev.matches_arch(arch)
+        self.archs@.contains(arch) && ev.arch == arch.token()
     }
 
     /// Defines whether evaluating the policy on event `ev`

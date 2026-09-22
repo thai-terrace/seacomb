@@ -16,9 +16,9 @@ impl Arch {
     pub const TOKEN_ARM: u32 = 0x4000_0028;
     pub const TOKEN_AARCH64: u32 = 0xC000_00B7;
 
-    /// Executable version of [`Event::matches_arch`].
-    pub fn token(self) -> (res: u32)
-        ensures forall |ev: Event| #[trigger] ev.matches_arch(self) <==> ev.arch == res
+    /// Executable version of [`Arch::token`].
+    pub fn to_token(self) -> (res: u32)
+        ensures res == self.token()
     {
         match self {
             Arch::X86 => Self::TOKEN_X86,
@@ -41,11 +41,11 @@ impl Arch {
             Builder::extends(old(b).rev@, final(b).rev@),
             final(b).wf(),
             res is Ok ==> forall |data: &[u8]| Event::parse(data) is Some
-                && Event::of(data).matches_arch(self) ==>
+                && Event::of(data).arch == self.token() ==>
                 #[trigger] Builder::goes_to_all(final(b).rev@, data, final(b).rev@.len(),
                     old(b).rev@.len(), Event::of(data).nr as u32),
             res is Ok ==> forall |data: &[u8]| Event::parse(data) is Some
-                && !Event::of(data).matches_arch(self) ==>
+                && Event::of(data).arch != self.token() ==>
                 #[trigger] Builder::goes_to_all(final(b).rev@, data, final(b).rev@.len(),
                     end as nat, Event::of(data).arch),
     {
@@ -53,7 +53,7 @@ impl Arch {
         b.emit(Instr::LdAbs(Policy::OFFSET_EVENT_NR));
         proof { Builder::lemma_ld(b.rev@, Policy::OFFSET_EVENT_NR); }
         let ghost loaded_nr = b.rev@;
-        b.emit_jump(JmpOp::Eq, Src::K(self.token()), false, end)?;
+        b.emit_jump(JmpOp::Eq, Src::K(self.to_token()), false, end)?;
         let ghost guarded_arch = b.rev@;
         b.emit(Instr::LdAbs(Policy::OFFSET_EVENT_ARCH));
         proof {
@@ -62,7 +62,7 @@ impl Arch {
                 #![trigger Builder::goes_to(b.rev@, data, b.rev@.len(), a, body.len(), Event::of(data).nr as u32)]
                 #![trigger Builder::goes_to(b.rev@, data, b.rev@.len(), a, end as nat, Event::of(data).arch)]
                 Event::parse(data) is Some implies
-                if Event::of(data).matches_arch(self) {
+                if Event::of(data).arch == self.token() {
                     Builder::goes_to(b.rev@, data, b.rev@.len(), a,
                         body.len(), Event::of(data).nr as u32)
                 } else {
@@ -71,9 +71,9 @@ impl Arch {
                 } by {
                 let ev = Event::of(data);
                 let nr = ev.nr as u32;
-                let to = if ev.matches_arch(self) { body.len() } else { end as nat };
+                let to = if ev.arch == self.token() { body.len() } else { end as nat };
                 Event::lemma_image(data);
-                if ev.matches_arch(self) {
+                if ev.arch == self.token() {
                     assert(Builder::goes_to(loaded_nr, data, loaded_nr.len(), ev.arch, body.len(), nr));
                     Builder::lemma_then(loaded_nr, guarded_arch, data, guarded_arch.len(), ev.arch,
                         loaded_nr.len(), ev.arch, to, nr);
@@ -106,7 +106,7 @@ impl Policy {
             res is Ok ==> forall |data: &[u8], tail: Action| Event::parse(data) is Some
                 && #[trigger] Builder::returns_all(old(b).rev@, data, old(b).rev@.len(), tail.to_ret()) ==>
                 Builder::returns_all(final(b).rev@, data, final(b).rev@.len(),
-                    if Event::of(data).matches_arch(arch) {
+                    if Event::of(data).arch == arch.token() {
                         self.dispatch(arch, Event::of(data), 7, self.rules@.len() as int).to_ret()
                     } else { tail.to_ret() }),
     {
@@ -119,15 +119,15 @@ impl Policy {
             assert forall |data: &[u8], tail: Action| Event::parse(data) is Some
                 && #[trigger] Builder::returns_all(prev, data, prev.len(), tail.to_ret()) implies
                 Builder::returns_all(b.rev@, data, b.rev@.len(),
-                    if Event::of(data).matches_arch(arch) {
+                    if Event::of(data).arch == arch.token() {
                         self.dispatch(arch, Event::of(data), 7, self.rules@.len() as int).to_ret()
                     } else { tail.to_ret() }) by {
                 let ev = Event::of(data);
-                let want = if ev.matches_arch(arch) {
+                let want = if ev.arch == arch.token() {
                     self.dispatch(arch, ev, 7, self.rules@.len() as int).to_ret()
                 } else { tail.to_ret() };
                 assert forall |a: u32| #[trigger] Builder::returns(b.rev@, data, b.rev@.len(), a, want) by {
-                    if ev.matches_arch(arch) {
+                    if ev.arch == arch.token() {
                         assert(Builder::goes_to_all(b.rev@, data, b.rev@.len(), body.len(), ev.nr as u32));
                         Builder::lemma_then(body, b.rev@, data, b.rev@.len(), a, body.len(), ev.nr as u32, 0, want);
                     } else {
