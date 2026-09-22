@@ -73,10 +73,9 @@ impl Syscall {
     pub(super) fn bpf_nr(&self, arch: Arch) -> (res: Option<u32>)
         ensures res == self.spec_bpf_nr(arch)
     {
-        match self.nr(arch) {
-            Some(nr) => Some(nr as u32),
-            None => None,
-        }
+        self.nr(arch).map(|nr: i32| -> (res: u32)
+            ensures res == nr as u32
+        { nr as u32 })
     }
 }
 

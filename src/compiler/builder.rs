@@ -98,16 +98,16 @@ impl Builder {
         let ghost all = self.rev@;
         let mut rev = self.rev;
         let mut instrs: Vec<Instr> = Vec::new();
-        while rev.len() > 0
+        while let Some(instr) = rev.pop()
             invariant
                 rev@.len() <= all.len(),
                 forall |j: int| #![trigger all[j]] 0 <= j < rev@.len() ==> rev@[j] == all[j],
                 instrs@.len() == all.len() - rev@.len(),
                 forall |j: int| #![trigger instrs@[j]]
                     0 <= j < instrs@.len() ==> instrs@[j] == all[all.len() - 1 - j],
+            ensures rev@.len() == 0
             decreases rev@.len()
         {
-            let instr = rev.pop().unwrap();
             instrs.push(instr);
         }
         assert(instrs@ =~= all.reverse());

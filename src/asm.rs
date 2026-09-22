@@ -97,13 +97,13 @@ impl Instr {
 }
 
 #[cfg_attr(not(target_os = "linux"), allow(unused))]
-pub struct RawProgram(Vec<SockFilter>);
+pub(crate) struct RawProgram(Vec<SockFilter>);
 
 #[cfg(target_os = "linux")]
 impl RawProgram {
     /// Installs this filter with the given flags and returns the raw `seccomp(2)` result.
     #[verifier::external_body]
-    pub fn install_with_flags(&self, flags: u64) -> libc::c_long {
+    pub(crate) fn install_with_flags(&self, flags: u64) -> libc::c_long {
         let fprog = libc::sock_fprog {
             len: self.0.len() as u16,
             filter: self.0.as_ptr() as *mut libc::sock_filter,
@@ -123,7 +123,8 @@ impl RawProgram {
 
 impl Program {
     /// The `struct sock_filter` array this program assembles to.
-    pub fn assemble(&self) -> RawProgram {
+    #[cfg_attr(not(target_os = "linux"), allow(unused))]
+    pub(crate) fn assemble(&self) -> RawProgram {
         let mut filter = Vec::with_capacity(self.instrs.len());
         let mut i: usize = 0;
         while i < self.instrs.len()

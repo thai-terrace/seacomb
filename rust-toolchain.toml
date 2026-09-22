@@ -1,6 +1,7 @@
 [toolchain]
 channel = "1.98.1"
 profile = "minimal"
+components = ["clippy"]
 targets = [
     "x86_64-unknown-linux-gnu",
     "i686-unknown-linux-gnu",

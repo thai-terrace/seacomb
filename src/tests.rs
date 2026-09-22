@@ -98,6 +98,7 @@ fn installation_checks_instruction_limit_before_side_effects() {
         }
         assert_eq!(filter.policy.to_cbpf().unwrap().instrs.len(), len);
         let child = Child::run_unfiltered(|| {
+            // SAFETY: PR_GET_NO_NEW_PRIVS takes scalar arguments and returns the flag directly.
             let before = unsafe { libc::prctl(libc::PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) };
             if before < 0 {
                 return 1;
@@ -109,6 +110,7 @@ fn installation_checks_instruction_limit_before_side_effects() {
             if !matches!(result, Err(Error::FilterTooLarge)) {
                 return 3;
             }
+            // SAFETY: PR_GET_NO_NEW_PRIVS takes scalar arguments and returns the flag directly.
             let after = unsafe { libc::prctl(libc::PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) };
             if after != before {
                 return 4;
@@ -149,6 +151,9 @@ impl Child {
 
     /// Runs `body` in a child process without installing a filter first.
     fn run_unfiltered(body: impl FnOnce() -> i32) -> Child {
+        // SAFETY: The child terminates with _exit rather than returning to the test harness.
+        // waitpid receives writable status storage and the PID returned by fork;
+        // fork, alarm, and _exit take no pointers into Rust memory.
         unsafe {
             let pid = libc::fork();
             assert!(pid >= 0, "fork failed");
@@ -170,6 +175,7 @@ impl Child {
 
     /// Calls getpid with explicit arguments and checks whether the filter denied it.
     fn check_getpid(args: [libc::c_ulong; 6], denied: bool) -> bool {
+        // SAFETY: getpid ignores these scalar argument registers and accesses no user buffer.
         let ret = unsafe {
             libc::syscall(
                 libc::SYS_getpid,
@@ -221,6 +227,7 @@ fn native_constructor_preserves_default() {
         if !Child::check_getpid([0; 6], true) {
             return 1;
         }
+        // SAFETY: getppid takes no arguments and accesses no user buffer.
         let ret = unsafe { libc::syscall(libc::SYS_getppid) };
         if ret != -1 || Child::errno() != libc::EACCES {
             return 2;
@@ -260,6 +267,7 @@ fn invalid_updates_preserve_existing_rules() {
         if !Child::check_getpid([0; 6], true) {
             return 1;
         }
+        // SAFETY: getppid takes no arguments and accesses no user buffer.
         if unsafe { libc::syscall(libc::SYS_getppid) } <= 0 {
             return 2;
         }
@@ -289,6 +297,7 @@ fn errno_zero_and_maximum_are_enforced() {
             .add_rule(Action::Errno(errno), Syscall::Getpid, vec![])
             .unwrap();
         let child = Child::run(&filter, || {
+            // SAFETY: getpid takes no arguments and accesses no user buffer.
             let ret = unsafe { libc::syscall(libc::SYS_getpid) };
             if errno == 0 {
                 if ret != 0 {
@@ -311,6 +320,7 @@ fn trace_without_tracer_returns_enosys() {
         .add_rule(Action::Trace(u16::MAX), Syscall::Getpid, vec![])
         .unwrap();
     let child = Child::run(&filter, || {
+        // SAFETY: getpid takes no arguments and accesses no user buffer.
         let ret = unsafe { libc::syscall(libc::SYS_getpid) };
         if ret == -1 && Child::errno() == libc::ENOSYS {
             0
@@ -329,6 +339,7 @@ fn trap_with_maximum_payload_signals() {
         .add_rule(Action::Trap(u16::MAX), Syscall::Getpid, vec![])
         .unwrap();
     let child = Child::run(&filter, || {
+        // SAFETY: getpid takes no arguments and accesses no user buffer.
         unsafe {
             libc::syscall(libc::SYS_getpid);
         }
@@ -534,8 +545,9 @@ fn masked_equality_ignores_value_bits_outside_mask() {
 #[test]
 fn ordering_is_unsigned() {
     let sign = (1 as libc::c_ulong) << (libc::c_ulong::BITS - 1);
+    let policy_sign = 1u64 << (libc::c_ulong::BITS - 1);
     Child::assert_cmp(
-        ArgCmp::lt(0, sign as u64),
+        ArgCmp::lt(0, policy_sign),
         &[
             (0, true),
             (sign - 1, true),
@@ -544,7 +556,7 @@ fn ordering_is_unsigned() {
         ],
     );
     Child::assert_cmp(
-        ArgCmp::gt(0, sign as u64),
+        ArgCmp::gt(0, policy_sign),
         &[
             (0, false),
             (sign - 1, false),
@@ -573,6 +585,8 @@ fn x86_64_unmatched_syscall_numbers_take_default() {
         .iter()
         .enumerate()
         {
+            // SAFETY: These numbers are invalid or select x32 read. The latter receives
+            // an invalid descriptor and a null, zero-length buffer, so it cannot write memory.
             let ret = unsafe {
                 libc::syscall(
                     *nr as libc::c_long,
@@ -597,6 +611,8 @@ fn socket_rule_covers_direct_and_multiplexed_calls() {
     filter
         .add_rule(Action::Errno(libc::EACCES as u16), Syscall::Socket, vec![])
         .unwrap();
+    // SAFETY: The socketcall argument arrays stay alive during each syscall. Socket creation
+    // takes only scalars; bind receives an invalid descriptor and a null, zero-length address.
     let child = Child::run(&filter, || unsafe {
         let args = [0 as libc::c_ulong; 3];
         if libc::syscall(libc::SYS_socket, args[0], args[1], args[2]) != -1 || Child::errno() != libc::EACCES
@@ -630,6 +646,8 @@ fn conditional_socket_rule_only_covers_direct_call() {
             vec![ArgCmp::eq(0, 1)],
         )
         .unwrap();
+    // SAFETY: Socket creation takes only scalar arguments. The socketcall array contains
+    // those same arguments and stays alive while the kernel reads it.
     let child = Child::run(&filter, || unsafe {
         if libc::syscall(
             libc::SYS_socket,
@@ -666,6 +684,8 @@ fn ipc_rule_checks_the_full_low_word_of_selector() {
     filter
         .add_rule(Action::Errno(libc::EACCES as u16), Syscall::Semget, vec![])
         .unwrap();
+    // SAFETY: The direct call and both IPC selectors select semget, which takes scalar
+    // arguments and does not access a user buffer.
     let child = Child::run(&filter, || unsafe {
         if libc::syscall(
             semget,
@@ -709,6 +729,8 @@ fn unavailable_syscall_does_not_alias_another_number() {
     filter
         .add_rule(Action::Errno(libc::EACCES as u16), Syscall::Open, vec![])
         .unwrap();
+    // SAFETY: io_submit receives an invalid context and zero requests. openat receives
+    // a null pathname, which the kernel rejects with EFAULT without accessing Rust memory.
     let child = Child::run(&filter, || unsafe {
         // The x86_64 open number is io_submit on aarch64.
         if libc::syscall(
@@ -757,6 +779,7 @@ fn long_rule_chains_preserve_matches_and_fallthrough() {
                 return i as i32 + 1;
             }
         }
+        // SAFETY: getppid takes no arguments and accesses no user buffer.
         if unsafe { libc::syscall(libc::SYS_getppid) } <= 0 {
             return 5;
         }
@@ -770,6 +793,7 @@ fn long_rule_chains_preserve_matches_and_fallthrough() {
 #[test]
 fn allow_all() {
     let filter = Filter::new_native(Action::Allow).unwrap();
+    // SAFETY: getpid takes no arguments and accesses no user buffer.
     let child = Child::run(&filter, || unsafe {
         if libc::syscall(libc::SYS_getpid) > 0 {
             0
@@ -788,6 +812,7 @@ fn errno_on_getpid() {
     filter
         .add_rule(Action::Errno(libc::EPERM as u16), Syscall::Getpid, vec![])
         .unwrap();
+    // SAFETY: getpid and getppid take no arguments and access no user buffer.
     let child = Child::run(&filter, || unsafe {
         if libc::syscall(libc::SYS_getpid) != -1 {
             return 1;
@@ -814,6 +839,7 @@ fn errno_on_first_argument() {
         .unwrap();
     let child = Child::run(&filter, || {
         // `lseek` on a descriptor nothing opened, which the kernel refuses with EBADF.
+        // SAFETY: lseek takes scalar arguments of the syscall ABI's word size, with no pointers.
         let lseek = |fd: libc::c_long, offset: libc::c_long| unsafe {
             libc::syscall(libc::SYS_lseek, fd, offset, libc::SEEK_SET as libc::c_long)
         };
@@ -842,6 +868,7 @@ fn kill_process_on_getppid() {
     filter
         .add_rule(Action::KillProcess, Syscall::Getppid, vec![])
         .unwrap();
+    // SAFETY: getppid takes no arguments and accesses no user buffer.
     let child = Child::run(&filter, || unsafe {
         libc::syscall(libc::SYS_getppid);
         0
@@ -861,6 +888,7 @@ fn errno_on_high_word_of_argument() {
         .unwrap();
     let child = Child::run(&filter, || {
         // `lseek` on a descriptor nothing opened, which the kernel refuses with EBADF.
+        // SAFETY: lseek takes scalar arguments of the syscall ABI's word size, with no pointers.
         let lseek = |fd: libc::c_long, offset: libc::c_long| unsafe {
             libc::syscall(libc::SYS_lseek, fd, offset, libc::SEEK_SET as libc::c_long)
         };
@@ -893,6 +921,7 @@ fn bad_arch_kills() {
     let mut filter = Filter::new(Action::Allow).ok().unwrap();
     filter.add_arch(absent).ok().unwrap();
     filter.on_bad_arch(Action::KillProcess).ok().unwrap();
+    // SAFETY: getpid takes no arguments and accesses no user buffer.
     let child = Child::run(&filter, || unsafe {
         libc::syscall(libc::SYS_getpid);
         0

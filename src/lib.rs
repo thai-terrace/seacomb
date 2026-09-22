@@ -1,5 +1,14 @@
 //! Top-level APIs for building and installing policies.
 
+#![deny(unsafe_op_in_unsafe_fn)]
+#![deny(unused_must_use)]
+#![deny(dangling_pointers_from_locals)]
+#![deny(dangling_pointers_from_temporaries)]
+
+#![warn(unnameable_types)]
+#![warn(unreachable_pub)]
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 mod asm;
 mod compiler;
 pub mod spec;
@@ -9,11 +18,8 @@ pub mod prop;
 mod tests;
 
 use vstd::prelude::*;
-use crate::spec::policy::*;
-use crate::spec::syscall::*;
-use crate::compiler::CompileError;
-
-pub use asm::RawProgram;
+use crate::spec::{policy::*, syscall::*};
+pub use crate::compiler::CompileError;
 
 verus! {
 
@@ -319,10 +325,10 @@ impl Filter {
     fn filter_flags(&self) -> u64 {
         let mut flags: u64 = 0;
         if self.ctl_tsync {
-            flags = flags | Self::FLAG_TSYNC;
+            flags |= Self::FLAG_TSYNC;
         }
         if self.ctl_log {
-            flags = flags | Self::FLAG_LOG;
+            flags |= Self::FLAG_LOG;
         }
         flags
     }
@@ -345,6 +351,7 @@ impl Filter {
         // `seccomp()` answers EACCES to a thread that holds neither CAP_SYS_ADMIN nor
         // `no_new_privs`, so `ctl_nnp` goes in first.
         if self.ctl_nnp {
+            // SAFETY: PR_SET_NO_NEW_PRIVS takes only scalar arguments and accesses no user buffer.
             let rc = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
             if rc != 0 {
                 return Err(Error::NoNewPrivsFailed(Error::errno()));

@@ -1170,15 +1170,14 @@ impl Rule {
     fn mux_arg(&self, arch: Arch) -> (res: Option<u32>)
         ensures res == self.spec_mux_arg(arch)
     {
-        if arch != Arch::X86 || self.conds.len() > 0 {
+        if arch != Arch::X86 || !self.conds.is_empty() {
             return None;
         }
         match self.syscall.socketcall_arg() {
             Some(arg) => Some(arg as u32),
-            None => match self.syscall.ipc_arg() {
-                Some(arg) => Some(arg as u32),
-                None => None,
-            },
+            None => self.syscall.ipc_arg().map(|arg: u64| -> (res: u32)
+                ensures res == arg as u32
+            { arg as u32 }),
         }
     }
 
@@ -1210,7 +1209,7 @@ impl Rule {
         ensures res == self.spec_mux_nr(arch)
     {
         // `Rule::eval` takes a multiplexed match only for a rule that tests no argument.
-        if arch != Arch::X86 || self.conds.len() > 0 {
+        if arch != Arch::X86 || !self.conds.is_empty() {
             return None;
         }
         let mux = if self.syscall.socketcall_arg().is_some() {
@@ -1221,10 +1220,9 @@ impl Rule {
             None
         };
         match mux {
-            Some(name) => match name.nr(arch) {
-                Some(nr) => Some(nr as u32),
-                None => None,
-            },
+            Some(name) => name.nr(arch).map(|nr: i32| -> (res: u32)
+                ensures res == nr as u32
+            { nr as u32 }),
             None => None,
         }
     }
