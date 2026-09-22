@@ -1,6 +1,0 @@
-# One kernel runs both x86_64 and i686 test binaries.
-base:
-- common.yaml
-- template:_images/debian-13
-
-arch: x86_64

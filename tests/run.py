@@ -1,41 +1,87 @@
 #!/usr/bin/env python3
+"""Build seacomb's tests for each supported Linux target and run them under QEMU.
+
+Usage: python3 tests/run.py [all|x86_64|i686|aarch64|armv7l]
+
+The test binaries are static musl executables, so a guest needs nothing but a kernel.
+Each binary is packed into an initramfs as /init and booted with a pinned Alpine kernel,
+downloaded once into target/test-kernels. The serial console carries the test output,
+and the panic the kernel raises when /init exits carries the exit status.
+"""
 import argparse
-import fcntl
+import hashlib
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
+from typing import NamedTuple
 
-TESTS = Path(__file__).resolve().parent
-ROOT = TESTS.parent
-# musl targets link statically with the toolchain's rust-lld, so no cross linker is needed.
-TARGETS = {
-    "x86_64": ("x86_64", "x86_64-unknown-linux-musl"),
-    "i686": ("x86_64", "i686-unknown-linux-musl"),
-    "aarch64": ("aarch64", "aarch64-unknown-linux-musl"),
-    "armv7l": ("armv7l", "armv7-unknown-linux-musleabihf"),
+ROOT = Path(__file__).resolve().parent.parent
+BUILD_DIR = ROOT / "target/cross-tests"
+KERNEL_DIR = ROOT / "target/test-kernels"
+KERNEL_URL = "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases"
+
+
+class Machine(NamedTuple):
+    """A QEMU machine and the Alpine kernel it boots."""
+    kernel: str
+    sha256: str
+    qemu: list
+    console: str
+
+
+# A replacement kernel needs SECCOMP_FILTER, BLK_DEV_INITRD, and a built-in serial console
+# (plus IA32_EMULATION on x86_64); check the config- file next to it in the release.
+MACHINES = {
+    "x86_64": Machine(
+        kernel="x86_64/netboot-3.24.2/vmlinuz-virt",
+        sha256="40f620bc8c93d952e57dd8dfc0f94fca1759d192a4fc4a260705d50ca378559c",
+        qemu=["qemu-system-x86_64", "-M", "q35", "-cpu", "max"],
+        console="ttyS0",
+    ),
+    "aarch64": Machine(
+        kernel="aarch64/netboot-3.24.2/vmlinuz-virt",
+        sha256="e45e1f6083d1ed45db6647b422e32b6ae6dc54de7b8190b7b97744fb293412e3",
+        qemu=["qemu-system-aarch64", "-M", "virt", "-cpu", "max"],
+        console="ttyAMA0",
+    ),
+    "armv7l": Machine(
+        kernel="armv7/netboot-3.24.2/vmlinuz-lts",
+        sha256="79e56b07cbeb6d658e03be69985cac68e73d018248606505d49457cb59420e4d",
+        qemu=["qemu-system-arm", "-M", "virt", "-cpu", "cortex-a15"],
+        console="ttyAMA0",
+    ),
 }
 
+# Each architecture's Rust target and the machine that runs it.
+# musl targets link statically with the toolchain's rust-lld, so no cross linker is needed.
+TARGETS = {
+    "x86_64": ("x86_64-unknown-linux-musl", "x86_64"),
+    "i686": ("i686-unknown-linux-musl", "x86_64"),
+    "aarch64": ("aarch64-unknown-linux-musl", "aarch64"),
+    "armv7l": ("armv7-unknown-linux-musleabihf", "armv7l"),
+}
 
-def run(*args, capture=False, timeout=None, ok=(0,)):
-    result = subprocess.run(args, text=True, cwd=ROOT, timeout=timeout,
-                            stdout=subprocess.PIPE if capture else None)
-    if result.returncode not in ok:
-        result.check_returncode()
-    return result.stdout
+# `do_exit` in `kernel/exit.c` panics with this, then dumps registers, when /init exits.
+INIT_EXIT = re.compile(r"Attempted to kill init! exitcode=0x([0-9a-f]+)")
 
 
-def lima(*args, **kwargs):
-    return run("limactl", *args, **kwargs)
+def run(*args, capture=False):
+    """Runs a command from the repository root and returns its output if captured."""
+    return subprocess.run(args, text=True, cwd=ROOT, check=True,
+                          stdout=subprocess.PIPE if capture else None).stdout
 
 
 def build(target):
+    """Builds the test binaries for `target` and returns their paths."""
     output = run("cargo", "test", "--no-run", "--locked", "--target", target,
                  "--config", f'target.{target}.linker="rust-lld"',
-                 "--target-dir", str(ROOT / "target/cross-tests"),
+                 "--target-dir", str(BUILD_DIR),
                  "--message-format=json-render-diagnostics", capture=True)
     artifacts = [json.loads(line) for line in output.splitlines() if line.startswith("{")]
     binaries = [a["executable"] for a in artifacts if a.get("reason") == "compiler-artifact"
@@ -45,52 +91,101 @@ def build(target):
     return binaries
 
 
-parser = argparse.ArgumentParser(description="Build tests on the host and run them in Lima.")
-parser.add_argument("arch", nargs="?", default="all", choices=["all", *TARGETS])
-args = parser.parse_args()
-host = {"arm64": "aarch64", "AMD64": "x86_64"}.get(platform.machine(), platform.machine())
-groups = {}
-for arch in TARGETS if args.arch == "all" else [args.arch]:
-    template, target = TARGETS[arch]
-    groups.setdefault(template, []).append((arch, target))
+def fetch_kernel(machine):
+    """Returns the cached kernel for `machine`, downloading and checking it first if needed."""
+    path = KERNEL_DIR / machine.kernel
+    if not path.exists():
+        url = f"{KERNEL_URL}/{machine.kernel}"
+        print(f"Downloading {url}", flush=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        partial = path.with_name(path.name + ".part")
+        run("curl", "-fsSL", "--retry", "3", "-o", str(partial), url)
+        if hashlib.sha256(partial.read_bytes()).hexdigest() != machine.sha256:
+            sys.exit(f"Checksum mismatch for {url}.")
+        partial.rename(path)
+    return path
 
-try:
-    lima_home = Path(os.environ.get("LIMA_HOME", Path.home() / ".lima"))
-    lima_home.mkdir(parents=True, exist_ok=True)
-    # Keep the lock file; the OS releases the lock even if the runner is killed.
-    with (lima_home / ".seacomb-tests.lock").open("a") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            print("Waiting for another seacomb test run...", flush=True)
-            fcntl.flock(lock, fcntl.LOCK_EX)
-        started = time.monotonic()
-        existing = set(lima("list", "--quiet", capture=True).splitlines())
-        for template, targets in groups.items():
-            binaries = [(arch, binary) for arch, target in targets for binary in build(target)]
-            vm = f"seacomb-{template}"
-            if vm in existing:
-                lima("start", "--tty=false", vm)
-            else:
-                driver = ["--vm-type=qemu"] if template != host else []
-                lima("start", "--tty=false", f"--name={vm}", *driver, str(TESTS / f"{template}.yaml"))
-                existing.add(vm)
-            try:
-                # Exit 2 means cloud-init finished with recoverable warnings.
-                lima("shell", "--workdir=/", vm, "cloud-init", "status", "--wait", timeout=600, ok=(0, 2))
-                guest_dir = lima("shell", "--workdir=/", vm, "mktemp", "-d", capture=True).strip()
-                for arch, binary in binaries:
-                    print(f"\n==> Testing {arch} ({vm})", flush=True)
-                    lima("copy", "--backend=scp", binary, f"{vm}:{guest_dir}/tests")
-                    lima("shell", f"--workdir={guest_dir}", vm, f"{guest_dir}/tests")
-            finally:
-                lima("stop", "--tty=false", vm)
-        print(f"\nAll selected tests passed in {time.monotonic() - started:.1f}s (including provisioning and shutdown).")
-except subprocess.CalledProcessError as error:
-    sys.exit(error.returncode)
-except subprocess.TimeoutExpired:
-    sys.exit("Timed out waiting for VM provisioning.")
-except OSError as error:
-    sys.exit(str(error))
-except KeyboardInterrupt:
-    sys.exit(130)
+
+def write_initramfs(binary, path):
+    """Writes a cpio archive whose only file is `binary`, installed as /init."""
+    # The newc format in `Documentation/driver-api/early-userspace/buffer-format.rst`:
+    # per file, "070701", 13 fields as 8 hex digits, the NUL-terminated name, and the
+    # data, with the name and the data each padded to 4 bytes. "TRAILER!!!" ends it.
+    entries = [("init", 0o100755, Path(binary).read_bytes()), ("TRAILER!!!", 0, b"")]
+    archive = bytearray()
+    for ino, (name, mode, data) in enumerate(entries, start=1):
+        # ino, mode, uid, gid, nlink, mtime, filesize, maj, min, rmaj, rmin, namesize, chksum
+        fields = [ino, mode, 0, 0, 1, 0, len(data), 0, 0, 0, 0, len(name) + 1, 0]
+        archive += b"070701" + b"".join(b"%08x" % f for f in fields)
+        archive += name.encode() + b"\0"
+        archive += b"\0" * (-len(archive) % 4) + data
+        archive += b"\0" * (-len(archive) % 4)
+    path.write_bytes(archive)
+
+
+def accelerators(arch):
+    """Returns QEMU's -accel flags, using the host hypervisor when `arch` is native."""
+    host = {"arm64": "aarch64", "AMD64": "x86_64"}.get(platform.machine(), platform.machine())
+    hypervisor = {"Darwin": "hvf", "Linux": "kvm"}.get(platform.system())
+    if arch == host and hypervisor:
+        return ["-accel", hypervisor, "-accel", "tcg"]
+    return ["-accel", "tcg"]
+
+
+def boot(arch, binary, scratch):
+    """Boots `binary` as /init, echoes its output, and returns its wait status or None."""
+    machine = MACHINES[arch]
+    initrd = scratch / f"{Path(binary).name}.cpio"
+    write_initramfs(binary, initrd)
+    command = [
+        *machine.qemu, *accelerators(arch), "-m", "512M", "-smp", "2",
+        "-nodefaults", "-display", "none", "-serial", "stdio",
+        "-kernel", str(fetch_kernel(machine)), "-initrd", str(initrd),
+        # Log only emergencies, and reboot at once on a panic, which
+        # -no-reboot turns into QEMU exiting.
+        "-append", f"console={machine.console} loglevel=1 panic=-1", "-no-reboot",
+    ]
+    status = None
+    with subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                          text=True, errors="replace") as qemu:
+        for line in qemu.stdout:
+            if match := INIT_EXIT.search(line):
+                status = int(match.group(1), 16)
+            elif status is None:
+                print(line, end="", flush=True)
+    if qemu.returncode != 0:
+        raise subprocess.CalledProcessError(qemu.returncode, command)
+    return status
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Build tests on the host and run them in QEMU.")
+    parser.add_argument("arch", nargs="?", default="all", choices=["all", *TARGETS])
+    args = parser.parse_args()
+
+    started = time.monotonic()
+    with tempfile.TemporaryDirectory() as scratch:
+        for arch in TARGETS if args.arch == "all" else [args.arch]:
+            target, machine_arch = TARGETS[arch]
+            for binary in build(target):
+                print(f"\n==> Testing {arch}", flush=True)
+                status = boot(machine_arch, binary, Path(scratch))
+                if status is None:
+                    sys.exit(f"The {arch} kernel stopped before the tests exited.")
+                code = os.waitstatus_to_exitcode(status)
+                if code < 0:
+                    sys.exit(f"The {arch} tests were killed by signal {-code}.")
+                if code > 0:
+                    sys.exit(code)
+    print(f"\nAll selected tests passed in {time.monotonic() - started:.1f}s.")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except subprocess.CalledProcessError as error:
+        sys.exit(error.returncode)
+    except OSError as error:
+        sys.exit(str(error))
+    except KeyboardInterrupt:
+        sys.exit(130)

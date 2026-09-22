@@ -5,20 +5,16 @@ with a similar interface to `libseccomp`.
 
 Supported architectures: x86, x86_64, ARM, and AArch64.
 
+To verify all proofs and build:
 ```
-# Verify proofs and build
 cargo verus build
 ```
 
 # Testing
 
-Install dependencies: Lima and QEMU.
-```sh
-# For macOS
-brew install lima qemu
-```
+First install QEMU (e.g., `brew install qemu`).
 
-To run all tests on one or all supported architectures:
+To run all tests on all or one specific supported architectures:
 ```sh
 python3 tests/run.py
 python3 tests/run.py aarch64
