@@ -1,7 +1,7 @@
 //! What the filter computes, told as a policy-level account of its blocks and rule tests.
 
 use vstd::prelude::*;
-use crate::spec::policy::*;
+use crate::spec::{policy::*, syscall::*};
 
 verus! {
 

@@ -1,7 +1,7 @@
 //! Compiling one rule: the test that reaches it, and the argument tests under it.
 
 use vstd::prelude::*;
-use crate::spec::{policy::*, cbpf::*};
+use crate::spec::{policy::*, syscall::*, cbpf::*};
 use super::CompileError;
 use super::builder::{Builder, Label};
 

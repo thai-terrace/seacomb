@@ -1,3 +1,4 @@
 pub mod cbpf;
+pub mod chain;
 pub mod policy;
-mod syscall;
+pub mod syscall;

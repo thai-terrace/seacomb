@@ -2,6 +2,7 @@
 
 use vstd::prelude::*;
 use crate::spec::policy::*;
+use crate::spec::syscall::*;
 
 verus! {
 

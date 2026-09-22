@@ -9,6 +9,7 @@ mod tests;
 
 use vstd::prelude::*;
 use crate::spec::policy::*;
+use crate::spec::syscall::*;
 use crate::compiler::CompileError;
 
 verus! {
