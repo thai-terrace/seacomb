@@ -31,18 +31,13 @@ impl Builder {
     }
 
     /// Puts one instruction in front of the program.
-    pub(super) fn emit(&mut self, instr: Instr) -> (res: Result<(), CompileError>)
+    pub(super) fn emit(&mut self, instr: Instr)
         ensures
             Builder::extends(old(self).rev@, final(self).rev@),
-            res is Ok ==> final(self).rev@ == old(self).rev@.push(instr),
-            res is Err ==> *final(self) == *old(self),
+            final(self).rev@ == old(self).rev@.push(instr),
             old(self).wf() && Builder::instr_ok(instr, old(self).rev@.len()) ==> final(self).wf(),
     {
-        if self.rev.len() >= Program::MAX_INSTRS as usize {
-            return Err(CompileError::PolicyTooLarge);
-        }
         self.rev.push(instr);
-        Ok(())
     }
 
     /// Puts a conditional jump in front of the program: control moves to `target`
@@ -70,18 +65,18 @@ impl Builder {
             let off = off as u8;
             let jt = if expect { off } else { 0 };
             let jf = if expect { 0 } else { off };
-            self.emit(Instr::Jmp { op, src, jt, jf })?;
+            self.emit(Instr::Jmp { op, src, jt, jf });
             proof { Builder::lemma_jmp(self.rev@, op, src->K_0, jt, jf); }
             Ok(())
         } else if off <= u32::MAX as usize {
             //      jmp op, src     ; take the branch that leads into the trampoline
             //      ja  target
-            self.emit(Instr::Ja(off as u32))?;
+            self.emit(Instr::Ja(off as u32));
             proof { Builder::lemma_ja(self.rev@, off as u32); }
             let ghost trampoline = self.rev@;
             let jt = if expect { 0 } else { 1 };
             let jf = if expect { 1 } else { 0 };
-            self.emit(Instr::Jmp { op, src, jt, jf })?;
+            self.emit(Instr::Jmp { op, src, jt, jf });
             proof {
                 Builder::lemma_jmp(self.rev@, op, src->K_0, jt, jf);
                 assert forall |data: &[u8], a: u32| op.eval(a, src->K_0) == expect implies
@@ -92,7 +87,7 @@ impl Builder {
             }
             Ok(())
         } else {
-            Err(CompileError::PolicyTooLarge)
+            Err(CompileError::JmpIdxOverflow)
         }
     }
 

@@ -1,7 +1,6 @@
 //! Tests of filter construction and native seccomp enforcement.
 
 use crate::api::{Error, Filter};
-use crate::compiler::CompileError;
 use crate::spec::policy::{Action, Arch, ArgCmp, Rule, Syscall};
 
 #[test]
@@ -16,7 +15,7 @@ fn native_constructor_adds_only_native() {
     }
     assert!(matches!(
         Filter::new_native(Action::Errno(4095)),
-        Err(Error::BadAction)
+        Err(Error::InvalidErrno)
     ));
 }
 
@@ -29,17 +28,14 @@ fn seven_conditions_compile() {
 }
 
 #[test]
-fn default_action_comparison_includes_payload() {
+fn rules_allow_matching_and_different_default_payloads() {
     for (default, same, different) in [
         (Action::Errno(1), Action::Errno(1), Action::Errno(2)),
         (Action::Trace(0), Action::Trace(0), Action::Trace(u16::MAX)),
         (Action::Trap(0), Action::Trap(0), Action::Trap(u16::MAX)),
     ] {
         let mut filter = Filter::new_native(default).unwrap();
-        assert!(matches!(
-            filter.add_rule(same, Syscall::Getpid, vec![]),
-            Err(Error::ActionIsDefault)
-        ));
+        filter.add_rule(same, Syscall::Getpid, vec![]).unwrap();
         filter.add_rule(different, Syscall::Getpid, vec![]).unwrap();
     }
 }
@@ -58,20 +54,66 @@ fn action_payload_boundaries() {
     for errno in [4095, 4096, u16::MAX] {
         assert!(matches!(
             Filter::new(Action::Errno(errno)),
-            Err(Error::BadAction)
+            Err(Error::InvalidErrno)
         ));
     }
 }
 
 #[test]
-fn oversized_program_is_rejected() {
+fn oversized_program_compiles() {
     let mut filter = Filter::new_native(Action::Allow).unwrap();
     for val in 0..1000 {
         filter
             .add_rule(Action::Errno(13), Syscall::Getpid, vec![ArgCmp::eq(0, val)])
             .unwrap();
     }
-    assert!(matches!(filter.to_cbpf(), Err(CompileError::PolicyTooLarge)));
+    let program = filter.to_cbpf().unwrap();
+    assert!(program.instrs.len() > 4096);
+    #[cfg(target_os = "linux")]
+    assert_eq!(Child::run_unfiltered(|| {
+        if !matches!(filter.install(), Err(Error::FilterTooLarge)) {
+            return 1;
+        }
+        if !matches!(program.install(&filter), Err(Error::FilterTooLarge)) {
+            return 2;
+        }
+        0
+    }), Child::Exited(0));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn installation_checks_instruction_limit_before_side_effects() {
+    use crate::spec::cbpf::{Instr, Program, RetVal};
+
+    // Also check a length that would wrap to 1 when cast to sock_fprog.len.
+    for len in [4096, 4097, 65537] {
+        let child = Child::run_unfiltered(|| {
+            let filter = Filter::new(Action::Allow).unwrap();
+            let program = Program {
+                instrs: (0..len)
+                    .map(|_| Instr::Ret(RetVal::K(Action::Allow.to_ret())))
+                    .collect(),
+            };
+            let before = unsafe { libc::prctl(libc::PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) };
+            if before < 0 {
+                return 1;
+            }
+            let result = program.install(&filter);
+            if len == 4096 {
+                return if result.is_ok() { 0 } else { 2 };
+            }
+            if !matches!(result, Err(Error::FilterTooLarge)) {
+                return 3;
+            }
+            let after = unsafe { libc::prctl(libc::PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) };
+            if after != before {
+                return 4;
+            }
+            0
+        });
+        assert_eq!(child, Child::Exited(0), "instruction count: {len}");
+    }
 }
 
 /// How a child process that ran under a filter ended.
@@ -96,16 +138,21 @@ impl Child {
 
     /// Runs `body` in a child process that has `filter` installed.
     fn run(filter: &Filter, body: impl FnOnce() -> i32) -> Child {
+        Self::run_unfiltered(|| match filter.install() {
+            Ok(()) => body(),
+            Err(_) => Self::INSTALL_FAILED,
+        })
+    }
+
+    /// Runs `body` in a child process without installing a filter first.
+    fn run_unfiltered(body: impl FnOnce() -> i32) -> Child {
         unsafe {
             let pid = libc::fork();
             assert!(pid >= 0, "fork failed");
             if pid == 0 {
                 // A denied exit would leave the child spinning, so cap how long it lives.
                 libc::alarm(10);
-                let status = match filter.install() {
-                    Ok(()) => body(),
-                    Err(_) => Self::INSTALL_FAILED,
-                };
+                let status = body();
                 libc::_exit(status);
             }
             let mut status: libc::c_int = 0;
@@ -201,7 +248,6 @@ fn invalid_updates_preserve_existing_rules() {
     ));
     for (action, conds) in [
         (Action::Errno(4095), vec![]),
-        (Action::Allow, vec![]),
         (Action::Errno(8), vec![ArgCmp::eq(u32::MAX, 0)]),
         (Action::Errno(8), vec![ArgCmp::eq(0, 0), ArgCmp::eq(6, 0)]),
     ] {
@@ -226,7 +272,7 @@ fn invalid_bad_arch_preserves_previous_action() {
     filter.on_bad_arch(Action::KillProcess).unwrap();
     assert!(matches!(
         filter.on_bad_arch(Action::Errno(4095)),
-        Err(Error::BadAction)
+        Err(Error::InvalidErrno)
     ));
     assert_eq!(Child::run(&filter, || 0), Child::Killed(libc::SIGSYS));
 }
@@ -865,13 +911,13 @@ fn duplicate_arch() {
     assert!(filter.add_arch(Arch::native().unwrap()).is_err());
 }
 
-/// A rule that only repeats the default action is turned down.
+/// A rule that repeats the default action is allowed.
 #[test]
 fn rule_repeats_default() {
     let mut filter = Filter::new_native(Action::Allow).unwrap();
     assert!(filter
         .add_rule(Action::Allow, Syscall::Getpid, vec![])
-        .is_err());
+        .is_ok());
 }
 
 /// Multiple tests of one argument in a single rule compile together.
@@ -890,7 +936,7 @@ fn argument_out_of_range() {
     let conds = vec![ArgCmp::eq(6, 0)];
     assert!(matches!(
         filter.add_rule(Action::Errno(1), Syscall::Lseek, conds),
-        Err(Error::ArgumentOutOfRange(6)),
+        Err(Error::InvalidArg(6)),
     ));
 }
 
@@ -911,11 +957,11 @@ fn rule_checks_condition_indices() {
         .is_ok());
     assert!(matches!(
         rule((0..7).map(|arg| ArgCmp::eq(arg, 0)).collect()).check(),
-        Err(Error::ArgumentOutOfRange(6)),
+        Err(Error::InvalidArg(6)),
     ));
     assert!(matches!(
         rule(vec![ArgCmp::eq(u32::MAX, 0)]).check(),
-        Err(Error::ArgumentOutOfRange(u32::MAX)),
+        Err(Error::InvalidArg(u32::MAX)),
     ));
     assert!(rule(vec![ArgCmp::eq(5, 0), ArgCmp::eq(0, 0), ArgCmp::ne(5, 1)])
         .check()
@@ -940,7 +986,7 @@ fn action_checks_return_validation_errors() {
     for errno in [4095, 4096, u16::MAX] {
         assert!(matches!(
             Action::Errno(errno).check(),
-            Err(Error::BadAction)
+            Err(Error::InvalidErrno)
         ));
     }
 }
@@ -956,19 +1002,19 @@ fn rule_checks_propagate_validation_errors() {
     assert!(rule(Action::Errno(1), vec![]).check().is_ok());
     assert!(matches!(
         rule(Action::Errno(4095), vec![]).check(),
-        Err(Error::BadAction)
+        Err(Error::InvalidErrno)
     ));
-    assert!(matches!(
-        Filter::new_native(Action::Allow).unwrap().add_rule(Action::Allow, Syscall::Getpid, vec![]),
-        Err(Error::ActionIsDefault)
-    ));
+    assert!(Filter::new_native(Action::Allow)
+        .unwrap()
+        .add_rule(Action::Allow, Syscall::Getpid, vec![])
+        .is_ok());
     assert!(matches!(
         rule(Action::Errno(1), (0..7).map(|arg| ArgCmp::eq(arg, 0)).collect()).check(),
-        Err(Error::ArgumentOutOfRange(6)),
+        Err(Error::InvalidArg(6)),
     ));
     assert!(matches!(
         rule(Action::Errno(1), vec![ArgCmp::eq(6, 0)]).check(),
-        Err(Error::ArgumentOutOfRange(6)),
+        Err(Error::InvalidArg(6)),
     ));
     assert!(rule(Action::Errno(1), vec![ArgCmp::eq(1, 0), ArgCmp::ne(1, 1)])
         .check()

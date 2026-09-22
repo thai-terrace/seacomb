@@ -1,5 +1,4 @@
-//! Abstract syntax and semantics of a subset of
-//! cBPF accepted by `seccomp_check_filter()`.
+//! Abstract syntax and semantics of a subset of cBPF accepted by seccomp.
 
 use vstd::prelude::*;
 
@@ -66,9 +65,7 @@ impl Instr {
     /// Well-formed instructions.
     pub open spec fn wf(self, pc: nat, max_pc: nat) -> bool {
         match self {
-            // `seccomp_check_filter()`: "32-bit aligned and not out of bounds".
-            // https://github.com/torvalds/linux/blob/40288c9206c17eb66a603262e06a58d300d0f279/kernel/seccomp.c#L287-L292
-            Instr::LdAbs(k) => k < Program::SECCOMP_DATA_SIZE && k % 4 == 0,
+            Instr::LdAbs(k) => k % 4 == 0,
             // Check for division by zero.
             Instr::Alu(AluOp::Div, Src::K(k)) => k != 0,
             Instr::Alu(AluOp::Lsh, Src::K(k)) => k < 32,
@@ -87,22 +84,12 @@ impl Instr {
 }
 
 impl Program {
-    /// `BPF_MAXINSNS` in `linux/bpf_common.h`.
-    pub const MAX_INSTRS: u32 = 4096;
-
     /// `BPF_MEMWORDS` in `linux/bpf_common.h`.
     pub const MEM_WORDS: u32 = 16;
 
-    /// `sizeof(struct seccomp_data)`:
-    /// `int nr; __u32 arch; __u64 instruction_pointer; __u64 args[6];` = 4 + 4 + 8 + 48.
-    /// <https://github.com/torvalds/linux/blob/40288c9206c17eb66a603262e06a58d300d0f279/include/uapi/linux/seccomp.h#L62-L67>
-    pub const SECCOMP_DATA_SIZE: u32 = 64;
-
-    /// `bpf_check_classic()` followed by `seccomp_check_filter()`, without the
-    /// `check_load_and_stores()` analysis
-    /// (<https://github.com/torvalds/linux/blob/40288c9206c17eb66a603262e06a58d300d0f279/net/core/filter.c#L935-L986>).
+    /// Structural instruction validity, without input-buffer bounds, Linux installation
+    /// limits, or scratch-memory initialization analysis.
     pub open spec fn wf(self) -> bool {
-        &&& 0 < self.instrs@.len() <= Self::MAX_INSTRS
         &&& self.instrs@.last() is Ret
         &&& forall |pc: int| #![trigger self.instrs@[pc]]
                 0 <= pc < self.instrs@.len() ==> self.instrs@[pc].wf(pc as nat, self.instrs@.len())

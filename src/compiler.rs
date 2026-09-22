@@ -17,8 +17,8 @@ verus! {
 
 #[derive(Debug)]
 pub enum CompileError {
-    /// Compiled policy exceeds the cBPF program size limit.
-    PolicyTooLarge,
+    /// The compiled program exceeds the jump offset limit.
+    JmpIdxOverflow,
 }
 
 impl Policy {
@@ -70,7 +70,7 @@ impl Policy {
         // policy leaves out of scope.
         //
         //      ret #act_bad_arch
-        b.emit(Instr::Ret(RetVal::K(self.act_bad_arch.to_ret())))?;
+        b.emit(Instr::Ret(RetVal::K(self.act_bad_arch.to_ret())));
 
         proof { Builder::lemma_ret(b.rev@, self.act_bad_arch.to_ret()); }
 
@@ -87,7 +87,7 @@ impl Policy {
                 b.wf(),
                 0 < b.rev@.len(),
                 b.rev@[0] is Ret,
-                forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE ==>
+                forall |data: &[u8]| Event::parse(data) is Some ==>
                     #[trigger] Builder::returns_all(b.rev@, data, b.rev@.len(),
                         self.blocks(Event::of(data), i as int).to_ret()),
             decreases i
@@ -97,7 +97,7 @@ impl Policy {
             let ghost i0 = i as int + 1;
             self.emit_arch_block(&mut b, self.archs[i])?;
             proof {
-                assert forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE implies
+                assert forall |data: &[u8]| Event::parse(data) is Some implies
                     #[trigger] Builder::returns_all(b.rev@, data, b.rev@.len(),
                         self.blocks(Event::of(data), i as int).to_ret()) by {
                     assert(Builder::returns_all(prev, data, prev.len(),
@@ -115,7 +115,6 @@ impl Policy {
                 &&& self.eval(Event::of(data), Action::from_ret(ret))
             } by {
                 let act = self.blocks(Event::of(data), 0);
-                assert(data@.len() == Program::SECCOMP_DATA_SIZE);
                 prog.lemma_run(data);
                 assert(prog.instrs@.len() == gb.rev@.len());
                 assert(Builder::returns_all(gb.rev@, data, gb.rev@.len(), act.to_ret()));

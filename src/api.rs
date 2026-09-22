@@ -9,22 +9,22 @@ verus! {
 /// An error while creating, updating, compiling, or installing a filter.
 #[derive(Debug)]
 pub enum Error {
-    /// An action contains an invalid value.
-    BadAction,
-    /// A rule has the same action as the filter's default.
-    ActionIsDefault,
-    /// A condition uses an argument index outside zero through five.
-    ArgumentOutOfRange(u32),
+    /// Invalid errno number.
+    InvalidErrno,
+    /// Invalid argument index (>= `ARG_COUNT_MAX`).
+    InvalidArg(u32),
     /// The filter already includes this architecture.
     DuplicateArch,
     /// The native architecture is not supported.
-    UnsupportedArch,
+    UnsupportedNativeArch,
     /// The policy could not be compiled into a filter program.
     Compile(CompileError),
-    /// Setting `no_new_privs` failed with this errno.
-    NoNewPrivs(i32),
-    /// Installing the seccomp filter failed with this errno.
-    SetModeFilter(i32),
+    /// The filter exceeds Linux's instruction limit.
+    FilterTooLarge,
+    /// Failed to set `no_new_privs`.
+    NoNewPrivsFailed(i32),
+    /// Failed to install the seccomp filter.
+    InstallFailed(i32),
 }
 
 impl Arch {
@@ -39,7 +39,7 @@ impl Arch {
         } else if cfg!(target_arch = "arm") {
             Ok(Arch::Arm)
         } else {
-            Err(Error::UnsupportedArch)
+            Err(Error::UnsupportedNativeArch)
         }
     }
 }
@@ -84,12 +84,10 @@ impl ArgCmp {
 impl Action {
     /// Checks whether this action contains a valid value.
     pub fn check(&self) -> (res: Result<(), Error>)
-        ensures
-            (res is Ok) == self.wf(),
-            res matches Err(err) ==> err is BadAction,
+        ensures (res is Ok) == self.wf()
     {
         match self {
-            Action::Errno(e) if (*e as u32) >= Self::MAX_ERRNO => Err(Error::BadAction),
+            Action::Errno(e) if (*e as u32) >= Self::MAX_ERRNO => Err(Error::InvalidErrno),
             _ => Ok(()),
         }
     }
@@ -111,7 +109,7 @@ impl Rule {
             decreases self.conds@.len() - i
         {
             if self.conds[i].arg >= Self::ARG_COUNT_MAX {
-                return Err(Error::ArgumentOutOfRange(self.conds[i].arg));
+                return Err(Error::InvalidArg(self.conds[i].arg));
             }
             i += 1;
         }
@@ -229,9 +227,8 @@ impl Filter {
     {
         let rule = Rule { action, syscall, conds, exact: false };
         rule.check()?;
-        if rule.action.to_ret() == self.policy.act_no_match.to_ret() {
-            return Err(Error::ActionIsDefault);
-        }
+        // NOTE: libseccomp enforces that the action cannot be the default action,
+        // but we do not have that restriction.
 
         let ghost prev = self.policy.rules@;
         self.policy.rules.push(rule);
@@ -340,12 +337,17 @@ impl Program {
     /// Loads this program using the filter's installation options.
     #[verifier::external_body]
     pub fn install(&self, filter: &Filter) -> Result<(), Error> {
+        // `BPF_MAXINSNS` in `linux/bpf_common.h`.
+        if self.instrs.len() > 4096 {
+            return Err(Error::FilterTooLarge);
+        }
+
         // `seccomp()` answers EACCES to a thread that holds neither CAP_SYS_ADMIN nor
         // `no_new_privs`, so `ctl_nnp` goes in first.
         if filter.ctl_nnp {
             let rc = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
             if rc != 0 {
-                return Err(Error::NoNewPrivs(Error::errno()));
+                return Err(Error::NoNewPrivsFailed(Error::errno()));
             }
         }
 
@@ -369,7 +371,7 @@ impl Program {
             // A thread that refuses TSYNC comes back as its own id rather than as -1,
             // unless `SECCOMP_FILTER_FLAG_TSYNC_ESRCH` is set, which this module leaves off.
             let errno = if rc < 0 { Error::errno() } else { libc::ESRCH };
-            return Err(Error::SetModeFilter(errno));
+            return Err(Error::InstallFailed(errno));
         }
         Ok(())
     }

@@ -25,11 +25,10 @@ impl Event {
         Event::parse(data)->Some_0
     }
 
-    /// A 64-byte image parses, and the filter's loads read back what the parser wrote.
+    /// The filter's loads read back the fields of a successfully parsed event.
     pub(super) proof fn lemma_image(data: &[u8])
-        requires data@.len() == Program::SECCOMP_DATA_SIZE
+        requires Event::parse(data) is Some
         ensures
-            Event::parse(data) is Some,
             Self::of(data).args.len() == Rule::ARG_COUNT_MAX,
             Builder::word(data, Policy::OFFSET_EVENT_NR) == Self::of(data).nr as u32,
             Builder::word(data, Policy::OFFSET_EVENT_ARCH) == Self::of(data).arch,

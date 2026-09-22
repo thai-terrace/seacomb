@@ -40,28 +40,28 @@ impl Arch {
         ensures
             Builder::extends(old(b).rev@, final(b).rev@),
             final(b).wf(),
-            res is Ok ==> forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE
+            res is Ok ==> forall |data: &[u8]| Event::parse(data) is Some
                 && Event::of(data).matches_arch(self) ==>
                 #[trigger] Builder::goes_to_all(final(b).rev@, data, final(b).rev@.len(),
                     old(b).rev@.len(), Event::of(data).nr as u32),
-            res is Ok ==> forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE
+            res is Ok ==> forall |data: &[u8]| Event::parse(data) is Some
                 && !Event::of(data).matches_arch(self) ==>
                 #[trigger] Builder::goes_to_all(final(b).rev@, data, final(b).rev@.len(),
                     end as nat, Event::of(data).arch),
     {
         let ghost body = b.rev@;
-        b.emit(Instr::LdAbs(Policy::OFFSET_EVENT_NR))?;
+        b.emit(Instr::LdAbs(Policy::OFFSET_EVENT_NR));
         proof { Builder::lemma_ld(b.rev@, Policy::OFFSET_EVENT_NR); }
         let ghost loaded_nr = b.rev@;
         b.emit_jump(JmpOp::Eq, Src::K(self.token()), false, end)?;
         let ghost guarded_arch = b.rev@;
-        b.emit(Instr::LdAbs(Policy::OFFSET_EVENT_ARCH))?;
+        b.emit(Instr::LdAbs(Policy::OFFSET_EVENT_ARCH));
         proof {
             Builder::lemma_ld(b.rev@, Policy::OFFSET_EVENT_ARCH);
             assert forall |data: &[u8], a: u32|
                 #![trigger Builder::goes_to(b.rev@, data, b.rev@.len(), a, body.len(), Event::of(data).nr as u32)]
                 #![trigger Builder::goes_to(b.rev@, data, b.rev@.len(), a, end as nat, Event::of(data).arch)]
-                data@.len() == Program::SECCOMP_DATA_SIZE implies
+                Event::parse(data) is Some implies
                 if Event::of(data).matches_arch(self) {
                     Builder::goes_to(b.rev@, data, b.rev@.len(), a,
                         body.len(), Event::of(data).nr as u32)
@@ -103,7 +103,7 @@ impl Policy {
         ensures
             Builder::extends(old(b).rev@, final(b).rev@),
             final(b).wf(),
-            res is Ok ==> forall |data: &[u8], tail: Action| data@.len() == Program::SECCOMP_DATA_SIZE
+            res is Ok ==> forall |data: &[u8], tail: Action| Event::parse(data) is Some
                 && #[trigger] Builder::returns_all(old(b).rev@, data, old(b).rev@.len(), tail.to_ret()) ==>
                 Builder::returns_all(final(b).rev@, data, final(b).rev@.len(),
                     if Event::of(data).matches_arch(arch) {
@@ -116,7 +116,7 @@ impl Policy {
         let ghost body = b.rev@;
         arch.emit_guard(b, end)?;
         proof {
-            assert forall |data: &[u8], tail: Action| data@.len() == Program::SECCOMP_DATA_SIZE
+            assert forall |data: &[u8], tail: Action| Event::parse(data) is Some
                 && #[trigger] Builder::returns_all(prev, data, prev.len(), tail.to_ret()) implies
                 Builder::returns_all(b.rev@, data, b.rev@.len(),
                     if Event::of(data).matches_arch(arch) {
@@ -146,17 +146,17 @@ impl Policy {
         ensures
             Builder::extends(old(b).rev@, final(b).rev@),
             final(b).wf(),
-            res is Ok ==> forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE ==>
+            res is Ok ==> forall |data: &[u8]| Event::parse(data) is Some ==>
                 #[trigger] Builder::returns(final(b).rev@, data, final(b).rev@.len(),
                     Event::of(data).nr as u32,
                     self.dispatch(arch, Event::of(data), 7, self.rules@.len() as int).to_ret()),
     {
-        b.emit(Instr::Ret(RetVal::K(self.act_no_match.to_ret())))?;
+        b.emit(Instr::Ret(RetVal::K(self.act_no_match.to_ret())));
         proof { Builder::lemma_ret(b.rev@, self.act_no_match.to_ret()); }
         // The builder runs backward: low precedence and early rules are emitted first.
         let mut priority: u8 = 0;
         proof {
-            assert forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE implies
+            assert forall |data: &[u8]| Event::parse(data) is Some implies
                 #[trigger] Builder::returns(b.rev@, data, b.rev@.len(), Event::of(data).nr as u32,
                     self.dispatch(arch, Event::of(data), -1, self.rules@.len() as int).to_ret()) by {
                 assert(Builder::returns_all(b.rev@, data, b.rev@.len(), self.act_no_match.to_ret()));
@@ -167,14 +167,14 @@ impl Policy {
                 priority <= 8,
                 self.wf(), b.wf(), 0 < b.rev@.len(),
                 Builder::extends(old(b).rev@, b.rev@),
-                forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE ==>
+                forall |data: &[u8]| Event::parse(data) is Some ==>
                     #[trigger] Builder::returns(b.rev@, data, b.rev@.len(), Event::of(data).nr as u32,
                         self.dispatch(arch, Event::of(data), priority - 1, self.rules@.len() as int).to_ret()),
             decreases 8 - priority
         {
             let mut i: usize = 0;
             proof {
-                assert forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE implies
+                assert forall |data: &[u8]| Event::parse(data) is Some implies
                     #[trigger] Builder::returns(b.rev@, data, b.rev@.len(), Event::of(data).nr as u32,
                         self.dispatch(arch, Event::of(data), priority as int, 0).to_ret()) by {
                     assert(Builder::returns(b.rev@, data, b.rev@.len(), Event::of(data).nr as u32,
@@ -187,7 +187,7 @@ impl Policy {
                     i <= self.rules@.len(),
                     self.wf(), b.wf(), 0 < b.rev@.len(),
                     Builder::extends(old(b).rev@, b.rev@),
-                    forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE ==>
+                    forall |data: &[u8]| Event::parse(data) is Some ==>
                         #[trigger] Builder::returns(b.rev@, data, b.rev@.len(), Event::of(data).nr as u32,
                             self.dispatch(arch, Event::of(data), priority as int, i as int).to_ret()),
                 decreases self.rules@.len() - i
@@ -199,7 +199,7 @@ impl Policy {
                     self.rules[i].emit_tests(b, arch)?;
                 }
                 proof {
-                    assert forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE implies
+                    assert forall |data: &[u8]| Event::parse(data) is Some implies
                         #[trigger] Builder::returns(b.rev@, data, b.rev@.len(), Event::of(data).nr as u32,
                             self.dispatch(arch, Event::of(data), priority as int, i + 1).to_ret()) by {
                         let ev = Event::of(data);
@@ -218,7 +218,7 @@ impl Policy {
             priority += 1;
         }
         proof {
-            assert forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE implies
+            assert forall |data: &[u8]| Event::parse(data) is Some implies
                 #[trigger] Builder::returns(b.rev@, data, b.rev@.len(), Event::of(data).nr as u32,
                     self.dispatch(arch, Event::of(data), 7, self.rules@.len() as int).to_ret()) by {
                 assert(Builder::returns(b.rev@, data, b.rev@.len(), Event::of(data).nr as u32,

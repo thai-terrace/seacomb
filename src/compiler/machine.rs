@@ -131,7 +131,7 @@ impl Builder {
     pub(super) open spec fn instr_ok(instr: Instr, i: nat) -> bool {
         &&& instr.simple()
         &&& match instr {
-            Instr::LdAbs(k) => k < Program::SECCOMP_DATA_SIZE && k % 4 == 0,
+            Instr::LdAbs(k) => k % 4 == 0,
             Instr::Alu(AluOp::Div, Src::K(k)) => k != 0,
             Instr::Alu(AluOp::Lsh, Src::K(k)) => k < 32,
             Instr::Alu(AluOp::Rsh, Src::K(k)) => k < 32,
@@ -143,9 +143,8 @@ impl Builder {
 
     /// Whether the instructions emitted so far can end a well-formed program.
     pub(super) open spec fn wf(self) -> bool {
-        &&& self.rev@.len() <= Program::MAX_INSTRS
-        &&& forall |i: int| #![trigger self.rev@[i]]
-                0 <= i < self.rev@.len() ==> Self::instr_ok(self.rev@[i], i as nat)
+        forall |i: int| #![trigger self.rev@[i]]
+            0 <= i < self.rev@.len() ==> Self::instr_ok(self.rev@[i], i as nat)
     }
 
     /// A well-formed buffer whose first instruction returns makes a well-formed program.
@@ -253,11 +252,10 @@ impl Builder {
         requires
             0 < rev.len(),
             rev[rev.len() - 1] == Instr::LdAbs(k),
-            k + 4 <= Program::SECCOMP_DATA_SIZE,
-        ensures forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE ==>
+        ensures forall |data: &[u8]| k + 4 <= data@.len() ==>
             #[trigger] Self::goes_to_all(rev, data, rev.len(), (rev.len() - 1) as nat, Self::word(data, k))
     {
-        assert forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE implies
+        assert forall |data: &[u8]| k + 4 <= data@.len() implies
             #[trigger] Self::goes_to_all(rev, data, rev.len(), (rev.len() - 1) as nat, Self::word(data, k)) by {
             assert forall |a: u32| #[trigger] Self::goes_to(rev, data, rev.len(), a,
                 (rev.len() - 1) as nat, Self::word(data, k)) by {
