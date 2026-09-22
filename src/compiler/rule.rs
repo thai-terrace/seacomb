@@ -33,47 +33,7 @@ impl Action {
         }
     }
 
-    /// The filter return value that makes the kernel take this action.
-    pub open spec fn to_ret(&self) -> u32 {
-        match self {
-            Action::KillProcess => Self::RET_KILL_PROCESS,
-            Action::KillThread => Self::RET_KILL_THREAD,
-            Action::Trap(data) => Self::RET_TRAP | *data as u32,
-            Action::Errno(data) => Self::RET_ERRNO | *data as u32,
-            Action::Trace(data) => Self::RET_TRACE | *data as u32,
-            Action::Log => Self::RET_LOG,
-            Action::Allow => Self::RET_ALLOW,
-            Action::Notify => Self::RET_USER_NOTIF,
-        }
-    }
-
-    /// [`Action::to_ret`] is the inverse of [`Action::from_ret`].
-    pub broadcast proof fn lemma_to_ret(&self)
-        ensures Action::from_ret(#[trigger] self.to_ret()) == *self
-    {
-        let data = match self {
-            Action::Trap(data) => *data,
-            Action::Errno(data) => *data,
-            Action::Trace(data) => *data,
-            _ => 0,
-        };
-        let d = data as u32;
-        assert(d < 0x1_0000);
-        assert(0x0000_0000u32 & 0xffff_0000u32 == 0x0000_0000u32
-            && 0x8000_0000u32 & 0xffff_0000u32 == 0x8000_0000u32
-            && 0x7fc0_0000u32 & 0xffff_0000u32 == 0x7fc0_0000u32
-            && 0x7ffc_0000u32 & 0xffff_0000u32 == 0x7ffc_0000u32
-            && 0x7fff_0000u32 & 0xffff_0000u32 == 0x7fff_0000u32) by (bit_vector);
-        assert((0x0003_0000u32 | d) & 0xffff_0000u32 == 0x0003_0000u32) by (bit_vector) requires d < 0x1_0000;
-        assert((0x0005_0000u32 | d) & 0xffff_0000u32 == 0x0005_0000u32) by (bit_vector) requires d < 0x1_0000;
-        assert((0x7ff0_0000u32 | d) & 0xffff_0000u32 == 0x7ff0_0000u32) by (bit_vector) requires d < 0x1_0000;
-        assert((0x0003_0000u32 | d) & 0x0000_ffffu32 == d) by (bit_vector) requires d < 0x1_0000;
-        assert((0x0005_0000u32 | d) & 0x0000_ffffu32 == d) by (bit_vector) requires d < 0x1_0000;
-        assert((0x7ff0_0000u32 | d) & 0x0000_ffffu32 == d) by (bit_vector) requires d < 0x1_0000;
-    }
-
     /// Executable version of [`Action::to_ret`].
-    #[verifier::when_used_as_spec(to_ret)]
     pub(super) fn exec_to_ret(&self) -> (res: u32)
         ensures res == self.to_ret()
     {
@@ -107,19 +67,19 @@ impl ArgCmp {
             arch.mask() == 0xFFFF_FFFF,
             xl == Builder::word(data, (Policy::OFFSET_EVENT_ARGS + 8 * self.arg) as u32),
         ensures
-            self.op is Eq ==> (self.holds(arch, Event::of(data).args)
+            self.op is Eq ==> (self.eval(arch, Event::of(data).args)
                 <==> xl == self.a as u32),
-            self.op is Ne ==> (self.holds(arch, Event::of(data).args)
+            self.op is Ne ==> (self.eval(arch, Event::of(data).args)
                 <==> xl != self.a as u32),
-            self.op is Lt ==> (self.holds(arch, Event::of(data).args)
+            self.op is Lt ==> (self.eval(arch, Event::of(data).args)
                 <==> xl < self.a as u32),
-            self.op is Le ==> (self.holds(arch, Event::of(data).args)
+            self.op is Le ==> (self.eval(arch, Event::of(data).args)
                 <==> xl <= self.a as u32),
-            self.op is Gt ==> (self.holds(arch, Event::of(data).args)
+            self.op is Gt ==> (self.eval(arch, Event::of(data).args)
                 <==> xl > self.a as u32),
-            self.op is Ge ==> (self.holds(arch, Event::of(data).args)
+            self.op is Ge ==> (self.eval(arch, Event::of(data).args)
                 <==> xl >= self.a as u32),
-            self.op is MaskedEq ==> (self.holds(arch, Event::of(data).args)
+            self.op is MaskedEq ==> (self.eval(arch, Event::of(data).args)
                 <==> xl & (self.a as u32) == (self.b as u32) & (self.a as u32)),
     {
         let x = Event::of(data).args[self.arg as int];
@@ -141,23 +101,23 @@ impl ArgCmp {
             xl == Builder::word(data, (Policy::OFFSET_EVENT_ARGS + 8 * self.arg) as u32),
             xh == Builder::word(data, (Policy::OFFSET_EVENT_ARGS + 8 * self.arg + 4) as u32),
         ensures
-            self.op is Eq ==> (self.holds(arch, Event::of(data).args)
+            self.op is Eq ==> (self.eval(arch, Event::of(data).args)
                 <==> xh == (self.a >> 32) as u32 && xl == self.a as u32),
-            self.op is Ne ==> (self.holds(arch, Event::of(data).args)
+            self.op is Ne ==> (self.eval(arch, Event::of(data).args)
                 <==> !(xh == (self.a >> 32) as u32 && xl == self.a as u32)),
-            self.op is Lt ==> (self.holds(arch, Event::of(data).args)
+            self.op is Lt ==> (self.eval(arch, Event::of(data).args)
                 <==> xh < (self.a >> 32) as u32
                     || (xh == (self.a >> 32) as u32 && xl < self.a as u32)),
-            self.op is Le ==> (self.holds(arch, Event::of(data).args)
+            self.op is Le ==> (self.eval(arch, Event::of(data).args)
                 <==> xh < (self.a >> 32) as u32
                     || (xh == (self.a >> 32) as u32 && xl <= self.a as u32)),
-            self.op is Gt ==> (self.holds(arch, Event::of(data).args)
+            self.op is Gt ==> (self.eval(arch, Event::of(data).args)
                 <==> xh > (self.a >> 32) as u32
                     || (xh == (self.a >> 32) as u32 && xl > self.a as u32)),
-            self.op is Ge ==> (self.holds(arch, Event::of(data).args)
+            self.op is Ge ==> (self.eval(arch, Event::of(data).args)
                 <==> xh > (self.a >> 32) as u32
                     || (xh == (self.a >> 32) as u32 && xl >= self.a as u32)),
-            self.op is MaskedEq ==> (self.holds(arch, Event::of(data).args)
+            self.op is MaskedEq ==> (self.eval(arch, Event::of(data).args)
                 <==> xh & (self.a >> 32) as u32
                         == (self.b >> 32) as u32 & (self.a >> 32) as u32
                     && xl & (self.a as u32) == (self.b as u32) & (self.a as u32)),
@@ -270,17 +230,17 @@ impl ArgCmp {
                 #[trigger] Builder::goes_to(s3, data, s3.len(), a, s2.len(), a),
         ensures
             forall |data: &[u8]| Event::parse(data) is Some
-                && self.holds(arch, Event::of(data).args) ==>
+                && self.eval(arch, Event::of(data).args) ==>
                 #[trigger] Builder::lands(s3, data, s3.len(),
                     Builder::word(data, hi), pass),
             forall |data: &[u8]| Event::parse(data) is Some
-                && !self.holds(arch, Event::of(data).args) ==>
+                && !self.eval(arch, Event::of(data).args) ==>
                 #[trigger] Builder::lands(s3, data, s3.len(),
                     Builder::word(data, hi), fail),
     {
         let a_hi = (self.a >> 32) as u32;
         assert forall |data: &[u8]| Event::parse(data) is Some
-            && self.holds(arch, Event::of(data).args) implies
+            && self.eval(arch, Event::of(data).args) implies
             #[trigger] Builder::lands(s3, data, s3.len(),
                 Builder::word(data, hi), pass) by {
             let xl = Builder::word(data, lo);
@@ -291,7 +251,7 @@ impl ArgCmp {
             Self::lemma_chain(s1, s2, s3, data, lo, xh, pass);
         }
         assert forall |data: &[u8]| Event::parse(data) is Some
-            && !self.holds(arch, Event::of(data).args) implies
+            && !self.eval(arch, Event::of(data).args) implies
             #[trigger] Builder::lands(s3, data, s3.len(),
                 Builder::word(data, hi), fail) by {
             let xl = Builder::word(data, lo);
@@ -330,17 +290,17 @@ impl ArgCmp {
                 #[trigger] Builder::goes_to(s3, data, s3.len(), a, s2.len(), a),
         ensures
             forall |data: &[u8]| Event::parse(data) is Some
-                && self.holds(arch, Event::of(data).args) ==>
+                && self.eval(arch, Event::of(data).args) ==>
                 #[trigger] Builder::lands(s3, data, s3.len(),
                     Builder::word(data, hi), pass),
             forall |data: &[u8]| Event::parse(data) is Some
-                && !self.holds(arch, Event::of(data).args) ==>
+                && !self.eval(arch, Event::of(data).args) ==>
                 #[trigger] Builder::lands(s3, data, s3.len(),
                     Builder::word(data, hi), fail),
     {
         let a_hi = (self.a >> 32) as u32;
         assert forall |data: &[u8]| Event::parse(data) is Some
-            && self.holds(arch, Event::of(data).args) implies
+            && self.eval(arch, Event::of(data).args) implies
             #[trigger] Builder::lands(s3, data, s3.len(),
                 Builder::word(data, hi), pass) by {
             let xl = Builder::word(data, lo);
@@ -356,7 +316,7 @@ impl ArgCmp {
             }
         }
         assert forall |data: &[u8]| Event::parse(data) is Some
-            && !self.holds(arch, Event::of(data).args) implies
+            && !self.eval(arch, Event::of(data).args) implies
             #[trigger] Builder::lands(s3, data, s3.len(),
                 Builder::word(data, hi), fail) by {
             let xl = Builder::word(data, lo);
@@ -395,17 +355,17 @@ impl ArgCmp {
                 #[trigger] Builder::goes_to(s4, data, s4.len(), a, s3.len(), a),
         ensures
             forall |data: &[u8]| Event::parse(data) is Some
-                && self.holds(arch, Event::of(data).args) ==>
+                && self.eval(arch, Event::of(data).args) ==>
                 #[trigger] Builder::lands(s4, data, s4.len(),
                     Builder::word(data, hi), pass),
             forall |data: &[u8]| Event::parse(data) is Some
-                && !self.holds(arch, Event::of(data).args) ==>
+                && !self.eval(arch, Event::of(data).args) ==>
                 #[trigger] Builder::lands(s4, data, s4.len(),
                     Builder::word(data, hi), fail),
     {
         let a_hi = (self.a >> 32) as u32;
         assert forall |data: &[u8]| Event::parse(data) is Some
-            && self.holds(arch, Event::of(data).args) implies
+            && self.eval(arch, Event::of(data).args) implies
             #[trigger] Builder::lands(s4, data, s4.len(),
                 Builder::word(data, hi), pass) by {
             let xl = Builder::word(data, lo);
@@ -423,7 +383,7 @@ impl ArgCmp {
             Self::lemma_step(s3, s4, data, xh, s3.len(), xh, pass);
         }
         assert forall |data: &[u8]| Event::parse(data) is Some
-            && !self.holds(arch, Event::of(data).args) implies
+            && !self.eval(arch, Event::of(data).args) implies
             #[trigger] Builder::lands(s4, data, s4.len(),
                 Builder::word(data, hi), fail) by {
             let xl = Builder::word(data, lo);
@@ -469,17 +429,17 @@ impl ArgCmp {
                 #[trigger] Builder::goes_to(s4, data, s4.len(), a, s3.len(), a),
         ensures
             forall |data: &[u8]| Event::parse(data) is Some
-                && self.holds(arch, Event::of(data).args) ==>
+                && self.eval(arch, Event::of(data).args) ==>
                 #[trigger] Builder::lands(s4, data, s4.len(),
                     Builder::word(data, hi), pass),
             forall |data: &[u8]| Event::parse(data) is Some
-                && !self.holds(arch, Event::of(data).args) ==>
+                && !self.eval(arch, Event::of(data).args) ==>
                 #[trigger] Builder::lands(s4, data, s4.len(),
                     Builder::word(data, hi), fail),
     {
         let a_hi = (self.a >> 32) as u32;
         assert forall |data: &[u8]| Event::parse(data) is Some
-            && self.holds(arch, Event::of(data).args) implies
+            && self.eval(arch, Event::of(data).args) implies
             #[trigger] Builder::lands(s4, data, s4.len(),
                 Builder::word(data, hi), pass) by {
             let xl = Builder::word(data, lo);
@@ -497,7 +457,7 @@ impl ArgCmp {
             Self::lemma_step(s3, s4, data, xh, s3.len(), xh, pass);
         }
         assert forall |data: &[u8]| Event::parse(data) is Some
-            && !self.holds(arch, Event::of(data).args) implies
+            && !self.eval(arch, Event::of(data).args) implies
             #[trigger] Builder::lands(s4, data, s4.len(),
                 Builder::word(data, hi), fail) by {
             let xl = Builder::word(data, lo);
@@ -543,17 +503,17 @@ impl ArgCmp {
                 #[trigger] Builder::goes_to(s4, data, s4.len(), a, s3.len(), a),
         ensures
             forall |data: &[u8]| Event::parse(data) is Some
-                && self.holds(arch, Event::of(data).args) ==>
+                && self.eval(arch, Event::of(data).args) ==>
                 #[trigger] Builder::lands(s4, data, s4.len(),
                     Builder::word(data, hi), pass),
             forall |data: &[u8]| Event::parse(data) is Some
-                && !self.holds(arch, Event::of(data).args) ==>
+                && !self.eval(arch, Event::of(data).args) ==>
                 #[trigger] Builder::lands(s4, data, s4.len(),
                     Builder::word(data, hi), fail),
     {
         let a_hi = (self.a >> 32) as u32;
         assert forall |data: &[u8]| Event::parse(data) is Some
-            && self.holds(arch, Event::of(data).args) implies
+            && self.eval(arch, Event::of(data).args) implies
             #[trigger] Builder::lands(s4, data, s4.len(),
                 Builder::word(data, hi), pass) by {
             let xl = Builder::word(data, lo);
@@ -571,7 +531,7 @@ impl ArgCmp {
             }
         }
         assert forall |data: &[u8]| Event::parse(data) is Some
-            && !self.holds(arch, Event::of(data).args) implies
+            && !self.eval(arch, Event::of(data).args) implies
             #[trigger] Builder::lands(s4, data, s4.len(),
                 Builder::word(data, hi), fail) by {
             let xl = Builder::word(data, lo);
@@ -617,17 +577,17 @@ impl ArgCmp {
                 #[trigger] Builder::goes_to(s4, data, s4.len(), a, s3.len(), a),
         ensures
             forall |data: &[u8]| Event::parse(data) is Some
-                && self.holds(arch, Event::of(data).args) ==>
+                && self.eval(arch, Event::of(data).args) ==>
                 #[trigger] Builder::lands(s4, data, s4.len(),
                     Builder::word(data, hi), pass),
             forall |data: &[u8]| Event::parse(data) is Some
-                && !self.holds(arch, Event::of(data).args) ==>
+                && !self.eval(arch, Event::of(data).args) ==>
                 #[trigger] Builder::lands(s4, data, s4.len(),
                     Builder::word(data, hi), fail),
     {
         let a_hi = (self.a >> 32) as u32;
         assert forall |data: &[u8]| Event::parse(data) is Some
-            && self.holds(arch, Event::of(data).args) implies
+            && self.eval(arch, Event::of(data).args) implies
             #[trigger] Builder::lands(s4, data, s4.len(),
                 Builder::word(data, hi), pass) by {
             let xl = Builder::word(data, lo);
@@ -645,7 +605,7 @@ impl ArgCmp {
             }
         }
         assert forall |data: &[u8]| Event::parse(data) is Some
-            && !self.holds(arch, Event::of(data).args) implies
+            && !self.eval(arch, Event::of(data).args) implies
             #[trigger] Builder::lands(s4, data, s4.len(),
                 Builder::word(data, hi), fail) by {
             let xl = Builder::word(data, lo);
@@ -693,11 +653,11 @@ impl ArgCmp {
                 #[trigger] Builder::goes_to(s4, data, s4.len(), a, s3.len(), a),
         ensures
             forall |data: &[u8]| Event::parse(data) is Some
-                && self.holds(arch, Event::of(data).args) ==>
+                && self.eval(arch, Event::of(data).args) ==>
                 #[trigger] Builder::lands(s5, data, s5.len(),
                     Builder::word(data, hi), pass),
             forall |data: &[u8]| Event::parse(data) is Some
-                && !self.holds(arch, Event::of(data).args) ==>
+                && !self.eval(arch, Event::of(data).args) ==>
                 #[trigger] Builder::lands(s5, data, s5.len(),
                     Builder::word(data, hi), fail),
     {
@@ -706,7 +666,7 @@ impl ArgCmp {
         let b_lo = self.b as u32;
         let b_hi = (self.b >> 32) as u32;
         assert forall |data: &[u8]| Event::parse(data) is Some
-            && self.holds(arch, Event::of(data).args) implies
+            && self.eval(arch, Event::of(data).args) implies
             #[trigger] Builder::lands(s5, data, s5.len(),
                 Builder::word(data, hi), pass) by {
             let xl = Builder::word(data, lo);
@@ -723,7 +683,7 @@ impl ArgCmp {
             Self::lemma_step(s4, s5, data, xh, s4.len(), xh & a_hi, pass);
         }
         assert forall |data: &[u8]| Event::parse(data) is Some
-            && !self.holds(arch, Event::of(data).args) implies
+            && !self.eval(arch, Event::of(data).args) implies
             #[trigger] Builder::lands(s5, data, s5.len(),
                 Builder::word(data, hi), fail) by {
             let xl = Builder::word(data, lo);
@@ -762,11 +722,11 @@ impl ArgCmp {
             Builder::extends(old(b).rev@, final(b).rev@),
             final(b).wf(),
             res is Ok ==> forall |data: &[u8], a: u32| Event::parse(data) is Some
-                && self.holds(arch, Event::of(data).args) ==>
+                && self.eval(arch, Event::of(data).args) ==>
                 #[trigger] Builder::lands(final(b).rev@, data, final(b).rev@.len(),
                     a, old(b).rev@.len()),
             res is Ok ==> forall |data: &[u8], a: u32| Event::parse(data) is Some
-                && !self.holds(arch, Event::of(data).args) ==>
+                && !self.eval(arch, Event::of(data).args) ==>
                 #[trigger] Builder::lands(final(b).rev@, data, final(b).rev@.len(),
                     a, fail as nat),
     {
@@ -793,7 +753,7 @@ impl ArgCmp {
                     proof {
                         let rev = b.rev@;
                         assert forall |data: &[u8]| Event::parse(data) is Some
-                            && self.holds(arch, Event::of(data).args) implies
+                            && self.eval(arch, Event::of(data).args) implies
                             #[trigger] Builder::lands(rev, data, rev.len(),
                                 Builder::word(data, lo), pass as nat) by {
                             let xl = Builder::word(data, lo);
@@ -807,7 +767,7 @@ impl ArgCmp {
                                 pass as nat);
                         }
                         assert forall |data: &[u8]| Event::parse(data) is Some
-                            && !self.holds(arch, Event::of(data).args) implies
+                            && !self.eval(arch, Event::of(data).args) implies
                             #[trigger] Builder::lands(rev, data, rev.len(),
                                 Builder::word(data, lo), fail as nat) by {
                             let xl = Builder::word(data, lo);
@@ -827,7 +787,7 @@ impl ArgCmp {
                 let rev = b.rev@;
                 if !(self.op is MaskedEq) {
                     assert forall |data: &[u8]| Event::parse(data) is Some
-                        && self.holds(arch, Event::of(data).args) implies
+                        && self.eval(arch, Event::of(data).args) implies
                         #[trigger] Builder::lands(rev, data, rev.len(),
                             Builder::word(data, lo), pass as nat) by {
                         let xl = Builder::word(data, lo);
@@ -835,7 +795,7 @@ impl ArgCmp {
                         assert(Builder::goes_to(rev, data, rev.len(), xl, pass as nat, xl));
                     }
                     assert forall |data: &[u8]| Event::parse(data) is Some
-                        && !self.holds(arch, Event::of(data).args) implies
+                        && !self.eval(arch, Event::of(data).args) implies
                         #[trigger] Builder::lands(rev, data, rev.len(),
                             Builder::word(data, lo), fail as nat) by {
                         let xl = Builder::word(data, lo);
@@ -845,12 +805,12 @@ impl ArgCmp {
                 }
                 let ext = rev.push(Instr::LdAbs(lo));
                 assert forall |data: &[u8], a: u32| Event::parse(data) is Some
-                    && self.holds(arch, Event::of(data).args) implies
+                    && self.eval(arch, Event::of(data).args) implies
                     #[trigger] Builder::lands(ext, data, ext.len(), a, pass as nat) by {
                     Self::lemma_load(rev, ext, data, lo, a, pass as nat);
                 }
                 assert forall |data: &[u8], a: u32| Event::parse(data) is Some
-                    && !self.holds(arch, Event::of(data).args) implies
+                    && !self.eval(arch, Event::of(data).args) implies
                     #[trigger] Builder::lands(ext, data, ext.len(), a, fail as nat) by {
                     Self::lemma_load(rev, ext, data, lo, a, fail as nat);
                 }
@@ -948,12 +908,12 @@ impl ArgCmp {
             let rev = b.rev@;
             let ext = rev.push(Instr::LdAbs(hi));
             assert forall |data: &[u8], a: u32| Event::parse(data) is Some
-                && self.holds(arch, Event::of(data).args) implies
+                && self.eval(arch, Event::of(data).args) implies
                 #[trigger] Builder::lands(ext, data, ext.len(), a, pass as nat) by {
                 Self::lemma_load(rev, ext, data, hi, a, pass as nat);
             }
             assert forall |data: &[u8], a: u32| Event::parse(data) is Some
-                && !self.holds(arch, Event::of(data).args) implies
+                && !self.eval(arch, Event::of(data).args) implies
                 #[trigger] Builder::lands(ext, data, ext.len(), a, fail as nat) by {
                 Self::lemma_load(rev, ext, data, hi, a, fail as nat);
             }
@@ -1161,7 +1121,7 @@ impl Rule {
                     implies #[trigger] Builder::returns(r_cond, data, r_cond.len(), a,
                         self.action.to_ret()) by {
                     let ev = Event::of(data);
-                    assert(self.conds@[i as int].holds(arch, ev.args));
+                    assert(self.conds@[i as int].eval(arch, ev.args));
                     assert(self.conds_hold(arch, ev, i + 1));
                     assert(Builder::lands(r_cond, data, r_cond.len(), a, r_prev.len()));
                     assert(Builder::returns_all(r_prev, data, r_prev.len(), self.action.to_ret()));
@@ -1174,7 +1134,7 @@ impl Rule {
                     implies #[trigger] Builder::lands(r_cond, data, r_cond.len(), a,
                         end as nat) by {
                     let ev = Event::of(data);
-                    if self.conds@[i as int].holds(arch, ev.args) {
+                    if self.conds@[i as int].eval(arch, ev.args) {
                         assert(!self.conds_hold(arch, ev, i + 1));
                         assert(Builder::lands(r_cond, data, r_cond.len(), a, r_prev.len()));
                         let m = choose |m: u32| Builder::goes_to(r_cond, data, r_cond.len(), a,

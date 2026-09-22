@@ -13,6 +13,8 @@ use crate::spec::policy::*;
 use crate::spec::syscall::*;
 use crate::compiler::CompileError;
 
+pub use asm::RawProgram;
+
 verus! {
 
 /// An error while creating, updating, compiling, or installing a filter.
@@ -349,22 +351,8 @@ impl Filter {
             }
         }
 
-        let mut instrs = program.assemble();
-
-        // The kernel copies the program out of `sock_fprog` before it returns, so the
-        // buffer only has to outlive the call.
-        let fprog = libc::sock_fprog {
-            len: instrs.len() as u16,
-            filter: instrs.as_mut_ptr() as *mut libc::sock_filter,
-        };
-        let rc = unsafe {
-            libc::syscall(
-                libc::SYS_seccomp,
-                libc::SECCOMP_SET_MODE_FILTER as libc::c_ulong,
-                self.filter_flags() as libc::c_ulong,
-                &fprog as *const libc::sock_fprog,
-            )
-        };
+        let raw = program.assemble();
+        let rc = raw.install_with_flags(self.filter_flags());
         if rc != 0 {
             // A thread that refuses TSYNC comes back as its own id rather than as -1,
             // unless `SECCOMP_FILTER_FLAG_TSYNC_ESRCH` is set, which this module leaves off.

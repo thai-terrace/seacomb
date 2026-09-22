@@ -1,4 +1,4 @@
-//! Abstract syntax and semantics of the libseccomp policy/rule language.
+//! Abstract syntax and semantics of the libseccomp policy language.
 
 use vstd::prelude::*;
 use super::syscall::*;
@@ -211,34 +211,24 @@ impl Action {
     pub const RET_LOG: u32 = 0x7ffc_0000;
     pub const RET_ALLOW: u32 = 0x7fff_0000;
 
-    /// Converts a BPF filter return value back to `Action`.
-    pub open spec fn from_ret(ret: u32) -> Action {
-        let action = ret & Self::RET_ACTION;
-        let data = (ret & Self::RET_DATA) as u16;
-        if action == Self::RET_ALLOW {
-            Action::Allow
-        } else if action == Self::RET_LOG {
-            Action::Log
-        } else if action == Self::RET_USER_NOTIF {
-            Action::Notify
-        } else if action == Self::RET_TRACE {
-            Action::Trace(data)
-        } else if action == Self::RET_ERRNO {
-            Action::Errno(data)
-        } else if action == Self::RET_TRAP {
-            Action::Trap(data)
-        } else if action == Self::RET_KILL_THREAD {
-            Action::KillThread
-        } else {
-            // RET_KILL_PROCESS and every other action value.
-            Action::KillProcess
+    /// Converts to the raw return value used in the BPF program.
+    pub open spec fn to_ret(&self) -> u32 {
+        match self {
+            Action::KillProcess => Self::RET_KILL_PROCESS,
+            Action::KillThread => Self::RET_KILL_THREAD,
+            Action::Trap(data) => Self::RET_TRAP | *data as u32,
+            Action::Errno(data) => Self::RET_ERRNO | *data as u32,
+            Action::Trace(data) => Self::RET_TRACE | *data as u32,
+            Action::Log => Self::RET_LOG,
+            Action::Allow => Self::RET_ALLOW,
+            Action::Notify => Self::RET_USER_NOTIF,
         }
     }
 }
 
 impl ArgCmp {
     /// `_db_rule_gen_64` / `_db_rule_gen_32`.
-    pub open spec fn holds(self, arch: Arch, args: Seq<u64>) -> bool {
+    pub open spec fn eval(self, arch: Arch, args: Seq<u64>) -> bool {
         let x = args[self.arg as int] & arch.mask();
         let a = self.a & arch.mask();
         let b = self.b & arch.mask();
@@ -258,7 +248,7 @@ impl Rule {
     /// Whether this rule matches event `ev` on `arch`.
     pub open spec fn eval(self, arch: Arch, ev: Event) -> bool {
         let conds_hold = forall |i: int| #![trigger self.conds@[i]]
-            0 <= i < self.conds@.len() ==> self.conds@[i].holds(arch, ev.args);
+            0 <= i < self.conds@.len() ==> self.conds@[i].eval(arch, ev.args);
         match ev.matches_syscall(arch, self.syscall) {
             SyscallMatch::Exact => conds_hold,
             // This is stricter than libseccomp, which still evaluates the conditions on a multiplexed syscall.

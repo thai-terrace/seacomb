@@ -6,30 +6,67 @@ use crate::spec::policy::Action;
 verus! {
 
 impl Action {
-    /// Action codes for which decoding preserves the kernel's precedence ordering.
-    pub(super) open spec fn recognized_ret(ret: u32) -> bool {
-        let code = ret & Self::RET_ACTION;
-        code == Self::RET_KILL_PROCESS || code == Self::RET_KILL_THREAD
-            || code == Self::RET_TRAP || code == Self::RET_ERRNO
-            || code == Self::RET_USER_NOTIF || code == Self::RET_TRACE
-            || code == Self::RET_LOG || code == Self::RET_ALLOW
-    }
-
-    pub(super) proof fn lemma_canonical_ret(ret: u32)
-        requires ret == Self::from_ret(ret).to_ret()
-        ensures Self::recognized_ret(ret)
-    {
-        assert(0x8000_0000u32 & 0xffff_0000u32 == 0x8000_0000u32) by (bit_vector);
-    }
-
-    pub(super) proof fn lemma_ret_precedence(a: u32, b: u32)
-        requires Self::recognized_ret(a), Self::recognized_ret(b)
+    /// Encoding keeps the action code and payload in separate fields.
+    proof fn lemma_ret_parts(self)
         ensures
-            (((a & Self::RET_ACTION) as i32) < ((b & Self::RET_ACTION) as i32))
-                <==> Self::from_ret(a).precedence() > Self::from_ret(b).precedence(),
-            (((a & Self::RET_ACTION) as i32) == ((b & Self::RET_ACTION) as i32))
-                <==> Self::from_ret(a).precedence() == Self::from_ret(b).precedence(),
+            self.to_ret() & Self::RET_ACTION == match self {
+                Action::KillProcess => Self::RET_KILL_PROCESS,
+                Action::KillThread => Self::RET_KILL_THREAD,
+                Action::Trap(_) => Self::RET_TRAP,
+                Action::Errno(_) => Self::RET_ERRNO,
+                Action::Notify => Self::RET_USER_NOTIF,
+                Action::Trace(_) => Self::RET_TRACE,
+                Action::Log => Self::RET_LOG,
+                Action::Allow => Self::RET_ALLOW,
+            },
+            self.to_ret() & Self::RET_DATA == match self {
+                Action::Trap(data) | Action::Errno(data) | Action::Trace(data) => data as u32,
+                _ => 0u32,
+            },
     {
+        let code = match self {
+            Action::KillProcess => Self::RET_KILL_PROCESS,
+            Action::KillThread => Self::RET_KILL_THREAD,
+            Action::Trap(_) => Self::RET_TRAP,
+            Action::Errno(_) => Self::RET_ERRNO,
+            Action::Notify => Self::RET_USER_NOTIF,
+            Action::Trace(_) => Self::RET_TRACE,
+            Action::Log => Self::RET_LOG,
+            Action::Allow => Self::RET_ALLOW,
+        };
+        let data = match self {
+            Action::Trap(data) | Action::Errno(data) | Action::Trace(data) => data,
+            _ => 0u16,
+        };
+        assert(code & 0xffff_0000u32 == code) by (bit_vector)
+            requires code == 0x8000_0000u32 || code == 0x0000_0000u32
+                || code == 0x0003_0000u32 || code == 0x0005_0000u32
+                || code == 0x7fc0_0000u32 || code == 0x7ff0_0000u32
+                || code == 0x7ffc_0000u32 || code == 0x7fff_0000u32;
+        assert(code | 0u32 == code) by (bit_vector);
+        assert((code | data as u32) & 0xffff_0000u32 == code
+            && (code | data as u32) & 0x0000_ffffu32 == data as u32) by (bit_vector)
+            requires code & 0xffff_0000u32 == code;
+    }
+
+    /// Equal encodings identify the same action, including its payload.
+    pub(super) proof fn lemma_to_ret_injective(a: Action, b: Action)
+        ensures (a.to_ret() == b.to_ret()) <==> a == b
+    {
+        a.lemma_ret_parts();
+        b.lemma_ret_parts();
+    }
+
+    /// Signed action-code ordering agrees with abstract action precedence.
+    pub(super) proof fn lemma_ret_precedence(a: Action, b: Action)
+        ensures
+            (((a.to_ret() & Self::RET_ACTION) as i32) < ((b.to_ret() & Self::RET_ACTION) as i32))
+                <==> a.precedence() > b.precedence(),
+            (((a.to_ret() & Self::RET_ACTION) as i32) == ((b.to_ret() & Self::RET_ACTION) as i32))
+                <==> a.precedence() == b.precedence(),
+    {
+        a.lemma_ret_parts();
+        b.lemma_ret_parts();
         assert(0x8000_0000u32 as i32 == -2147483648i32) by (bit_vector);
     }
 }

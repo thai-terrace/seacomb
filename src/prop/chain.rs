@@ -35,53 +35,45 @@ impl Policy {
         assert(Self::chain_wins(policies, ev, act, i));
     }
 
-    /// Pointwise form of the compilation guarantee, after decoding the action witness.
+    /// Pointwise compilation guarantee using each policy's action witness.
     pub(super) proof fn lemma_eval_chain_compiled_at(
-        policies: Seq<Policy>, filters: Seq<Program>, ev: Event, data: &[u8], act: Action,
+        policies: Seq<Policy>, filters: Seq<Program>, actions: Seq<Action>,
+        ev: Event, data: &[u8], act: Action,
     )
         requires
             policies.len() == filters.len(),
+            actions.len() == policies.len(),
             forall |i: int| 0 <= i < policies.len() ==> #[trigger] policies[i].wf(),
             forall |i: int| 0 <= i < filters.len() ==> #[trigger] filters[i].wf(),
             forall |i: int| 0 <= i < filters.len() ==> {
-                &&& #[trigger] filters[i].eval(data) matches Outcome::Return(ret)
-                &&& policies[i].eval(ev, Action::from_ret(ret))
-                &&& ret == Action::from_ret(ret).to_ret()
+                &&& policies[i].eval(ev, #[trigger] actions[i])
+                &&& filters[i].eval(data) == Outcome::Return(actions[i].to_ret())
             },
         ensures Self::eval_chain(policies, ev, act)
             <==> Program::eval_chain(filters, data, act.to_ret()),
     {
         hide(Policy::eval);
         hide(Program::eval);
-        act.lemma_to_ret();
-        Action::Allow.lemma_to_ret();
+        Action::lemma_to_ret_injective(act, Action::Allow);
         assert(Action::RET_ALLOW & Action::RET_ACTION == Action::RET_ALLOW) by (bit_vector);
         let ret = act.to_ret();
-        Action::lemma_canonical_ret(ret);
-        Action::lemma_canonical_ret(Action::RET_ALLOW);
-        assert forall |j: int| 0 <= j < filters.len() implies
-            Action::recognized_ret((#[trigger] filters[j].eval(data))->Return_0) by {
-            Action::lemma_canonical_ret(filters[j].eval(data)->Return_0);
-        }
         if policies.len() != 0 {
             if Self::eval_chain(policies, ev, act) {
                 Self::lemma_chain_eval_witness(policies, ev, act);
                 let i = choose |i: int| #[trigger] Self::chain_wins(policies, ev, act, i);
-                let selected = filters[i].eval(data)->Return_0;
-                policies[i].lemma_eval_unique(ev, act, Action::from_ret(selected));
+                policies[i].lemma_eval_unique(ev, act, actions[i]);
                 assert(filters[i].eval(data) == Outcome::Return(ret));
                 if act == Action::Allow {
                     assert forall |j: int| 0 <= j < filters.len() implies {
                         &&& #[trigger] filters[j].eval(data) matches Outcome::Return(other)
                         &&& other & Action::RET_ACTION == Action::RET_ALLOW
                     } by {
-                        let other = filters[j].eval(data)->Return_0;
-                        assert(policies[j].eval(ev, Action::from_ret(other)));
-                        assert(Action::from_ret(other).precedence() <= act.precedence());
-                        assert(Action::from_ret(other) == Action::Allow);
+                        assert(policies[j].eval(ev, actions[j]));
+                        assert(actions[j].precedence() <= act.precedence());
+                        assert(actions[j] == Action::Allow);
                     }
                 } else {
-                    Action::lemma_ret_precedence(ret, Action::RET_ALLOW);
+                    Action::lemma_ret_precedence(act, Action::Allow);
                     assert forall |j: int| 0 <= j < filters.len() implies {
                         &&& #[trigger] filters[j].eval(data) matches Outcome::Return(other)
                         &&& {
@@ -90,9 +82,8 @@ impl Policy {
                             priority < other_priority || (priority == other_priority && j <= i)
                         }
                     } by {
-                        let other = filters[j].eval(data)->Return_0;
-                        assert(policies[j].eval(ev, Action::from_ret(other)));
-                        Action::lemma_ret_precedence(ret, other);
+                        assert(policies[j].eval(ev, actions[j]));
+                        Action::lemma_ret_precedence(act, actions[j]);
                     }
                     assert(Program::chain_wins(filters, data, ret, i));
                 }
@@ -102,31 +93,31 @@ impl Policy {
                 if ret == Action::RET_ALLOW {
                     assert(act == Action::Allow);
                     let i = policies.len() - 1;
-                    let selected = filters[i].eval(data)->Return_0;
-                    assert(Action::from_ret(selected) == Action::Allow);
+                    Action::lemma_ret_precedence(actions[i], Action::Allow);
+                    assert(actions[i] == Action::Allow);
                     assert(policies[i].eval(ev, act));
                     assert forall |j: int, other: Action| 0 <= j < policies.len()
                         && #[trigger] policies[j].eval(ev, other) implies {
                             ||| other.precedence() < act.precedence()
                             ||| other.precedence() == act.precedence() && j <= i
                         } by {
-                        let raw = filters[j].eval(data)->Return_0;
-                        assert(Action::from_ret(raw) == Action::Allow);
-                        policies[j].lemma_eval_unique(ev, other, Action::from_ret(raw));
+                        Action::lemma_ret_precedence(actions[j], Action::Allow);
+                        assert(actions[j] == Action::Allow);
+                        policies[j].lemma_eval_unique(ev, other, actions[j]);
                     }
                     assert(Self::chain_wins(policies, ev, act, i));
                 } else {
                     Program::lemma_chain_eval_witness(filters, data, ret);
                     let i = choose |i: int| #[trigger] Program::chain_wins(filters, data, ret, i);
+                    Action::lemma_to_ret_injective(act, actions[i]);
                     assert(policies[i].eval(ev, act));
                     assert forall |j: int, other: Action| 0 <= j < policies.len()
                         && #[trigger] policies[j].eval(ev, other) implies {
                             ||| other.precedence() < act.precedence()
                             ||| other.precedence() == act.precedence() && j <= i
                         } by {
-                        let raw = filters[j].eval(data)->Return_0;
-                        policies[j].lemma_eval_unique(ev, other, Action::from_ret(raw));
-                        Action::lemma_ret_precedence(ret, raw);
+                        policies[j].lemma_eval_unique(ev, other, actions[j]);
+                        Action::lemma_ret_precedence(act, other);
                     }
                     assert(Self::chain_wins(policies, ev, act, i));
                 }

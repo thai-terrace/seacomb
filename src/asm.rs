@@ -5,15 +5,6 @@ use crate::spec::cbpf::*;
 
 verus! {
 
-/// `struct sock_filter` in `linux/filter.h`.
-#[repr(C)]
-pub struct SockFilter {
-    pub code: u16,
-    pub jt: u8,
-    pub jf: u8,
-    pub k: u32,
-}
-
 impl Src {
     /// The `BPF_SRC` bit of this operand.
     fn code(&self) -> u16 {
@@ -48,6 +39,15 @@ impl RetVal {
             RetVal::A => 0,
         }
     }
+}
+
+/// `struct sock_filter` in `linux/filter.h`.
+#[repr(C)]
+struct SockFilter {
+    code: u16,
+    jt: u8,
+    jf: u8,
+    k: u32,
 }
 
 impl Instr {
@@ -96,9 +96,34 @@ impl Instr {
     }
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(unused))]
+pub struct RawProgram(Vec<SockFilter>);
+
+#[cfg(target_os = "linux")]
+impl RawProgram {
+    /// Installs this filter with the given flags and returns the raw `seccomp(2)` result.
+    #[verifier::external_body]
+    pub fn install_with_flags(&self, flags: u64) -> libc::c_long {
+        let fprog = libc::sock_fprog {
+            len: self.0.len() as u16,
+            filter: self.0.as_ptr() as *mut libc::sock_filter,
+        };
+        // SAFETY: Both fprog and its instruction buffer remain alive for the call.
+        // The kernel only reads them and copies the filter before returning.
+        unsafe {
+            libc::syscall(
+                libc::SYS_seccomp,
+                libc::SECCOMP_SET_MODE_FILTER as libc::c_ulong,
+                flags as libc::c_ulong,
+                &fprog as *const libc::sock_fprog,
+            )
+        }
+    }
+}
+
 impl Program {
     /// The `struct sock_filter` array this program assembles to.
-    pub fn assemble(&self) -> Vec<SockFilter> {
+    pub fn assemble(&self) -> RawProgram {
         let mut filter = Vec::with_capacity(self.instrs.len());
         let mut i: usize = 0;
         while i < self.instrs.len()
@@ -108,7 +133,7 @@ impl Program {
             filter.push(self.instrs[i].assemble());
             i += 1;
         }
-        filter
+        RawProgram(filter)
     }
 }
 

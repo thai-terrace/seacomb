@@ -41,21 +41,24 @@ impl Policy {
     {
         hide(Policy::eval);
         hide(Program::eval);
-        assert forall |i: int| 0 <= i < filters.len() implies {
-            &&& #[trigger] filters[i].eval(data) matches Outcome::Return(ret)
-            &&& policies[i].eval(ev, Action::from_ret(ret))
-            &&& ret == Action::from_ret(ret).to_ret()
-        } by {
-            let act = choose |act: Action| {
+        let actions = Seq::new(policies.len(), |i: int|
+            choose |act: Action| {
                 &&& #[trigger] policies[i].eval(ev, act)
                 &&& filters[i].eval(data) == Outcome::Return(act.to_ret())
-            };
-            act.lemma_to_ret();
+            });
+        assert forall |i: int| 0 <= i < filters.len() implies {
+            &&& policies[i].eval(ev, #[trigger] actions[i])
+            &&& filters[i].eval(data) == Outcome::Return(actions[i].to_ret())
+        } by {
+            assert(exists |act: Action| {
+                &&& #[trigger] policies[i].eval(ev, act)
+                &&& filters[i].eval(data) == Outcome::Return(act.to_ret())
+            });
         }
         assert forall |act: Action|
             #[trigger] Self::eval_chain(policies, ev, act)
                 <==> Program::eval_chain(filters, data, act.to_ret()) by {
-            Self::lemma_eval_chain_compiled_at(policies, filters, ev, data, act);
+            Self::lemma_eval_chain_compiled_at(policies, filters, actions, ev, data, act);
         }
     }
 
