@@ -38,3 +38,14 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --locked --all-targets --target ${{ matrix.target }} -- -D warnings
+
+  qemu:
+    name: QEMU tests (macOS)
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install QEMU
+        run: brew install qemu
+      - name: Test all architectures
+        run: python3 tests/run.py
