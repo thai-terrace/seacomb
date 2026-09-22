@@ -69,10 +69,10 @@ impl Policy {
         // The filter's last resort: the event came from an architecture that the
         // policy leaves out of scope.
         //
-        //      ret #act_badarch
-        b.emit(Instr::Ret(RetVal::K(self.attrs.act_badarch.to_ret())))?;
+        //      ret #act_bad_arch
+        b.emit(Instr::Ret(RetVal::K(self.act_bad_arch.to_ret())))?;
 
-        proof { Builder::lemma_ret(b.rev@, self.attrs.act_badarch.to_ret()); }
+        proof { Builder::lemma_ret(b.rev@, self.act_bad_arch.to_ret()); }
 
         // One block per architecture token, tried in turn:
         //

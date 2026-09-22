@@ -2,7 +2,7 @@
 
 use crate::api::{Error, Filter};
 use crate::compiler::CompileError;
-use crate::spec::policy::{Action, Arch, ArgCmp, Attrs, Rule, Syscall, SyscallName};
+use crate::spec::policy::{Action, Arch, ArgCmp, Rule, Syscall};
 
 #[test]
 fn native_constructor_adds_only_native() {
@@ -24,7 +24,7 @@ fn native_constructor_adds_only_native() {
 fn seven_conditions_compile() {
     let mut filter = Filter::new_native(Action::Allow).unwrap();
     let conds = (0..7).map(|arg| ArgCmp::eq(arg % 6, 0)).collect();
-    filter.add_rule(Action::Errno(1), SyscallName::Getpid, conds).unwrap();
+    filter.add_rule(Action::Errno(1), Syscall::Getpid, conds).unwrap();
     assert!(filter.to_cbpf().is_ok());
 }
 
@@ -37,10 +37,10 @@ fn default_action_comparison_includes_payload() {
     ] {
         let mut filter = Filter::new_native(default).unwrap();
         assert!(matches!(
-            filter.add_rule(same, SyscallName::Getpid, vec![]),
+            filter.add_rule(same, Syscall::Getpid, vec![]),
             Err(Error::ActionIsDefault)
         ));
-        filter.add_rule(different, SyscallName::Getpid, vec![]).unwrap();
+        filter.add_rule(different, Syscall::Getpid, vec![]).unwrap();
     }
 }
 
@@ -53,7 +53,7 @@ fn action_payload_boundaries() {
         Action::Trap(u16::MAX),
     ] {
         let mut filter = Filter::new_native(Action::Allow).unwrap();
-        filter.add_rule(action, SyscallName::Getpid, vec![]).unwrap();
+        filter.add_rule(action, Syscall::Getpid, vec![]).unwrap();
     }
     for errno in [4095, 4096, u16::MAX] {
         assert!(matches!(
@@ -68,7 +68,7 @@ fn oversized_program_is_rejected() {
     let mut filter = Filter::new_native(Action::Allow).unwrap();
     for val in 0..1000 {
         filter
-            .add_rule(Action::Errno(13), SyscallName::Getpid, vec![ArgCmp::eq(0, val)])
+            .add_rule(Action::Errno(13), Syscall::Getpid, vec![ArgCmp::eq(0, val)])
             .unwrap();
     }
     assert!(matches!(filter.to_cbpf(), Err(CompileError::PolicyTooLarge)));
@@ -143,7 +143,7 @@ impl Child {
         let arg = cmp.arg as usize;
         let mut filter = Filter::new_native(Action::Allow).unwrap();
         filter
-            .add_rule(Action::Errno(libc::EACCES as u16), SyscallName::Getpid, vec![cmp])
+            .add_rule(Action::Errno(libc::EACCES as u16), Syscall::Getpid, vec![cmp])
             .unwrap();
         let child = Self::run(&filter, || {
             for (i, &(val, denied)) in cases.iter().enumerate() {
@@ -163,9 +163,9 @@ impl Child {
 #[test]
 fn native_constructor_preserves_default() {
     let mut filter = Filter::new_native(Action::Errno(libc::EACCES as u16)).unwrap();
-    filter.add_rule(Action::Allow, SyscallName::Exit, vec![]).unwrap();
+    filter.add_rule(Action::Allow, Syscall::Exit, vec![]).unwrap();
     filter
-        .add_rule(Action::Allow, SyscallName::ExitGroup, vec![])
+        .add_rule(Action::Allow, Syscall::ExitGroup, vec![])
         .unwrap();
     let child = Child::run(&filter, || {
         if !Child::check_getpid([0; 6], true) {
@@ -182,9 +182,9 @@ fn native_constructor_preserves_default() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn empty_architectures_always_take_badarch() {
+fn empty_architectures_always_take_bad_arch() {
     let mut filter = Filter::new(Action::Allow).unwrap();
-    filter.on_badarch(Action::KillProcess).unwrap();
+    filter.on_bad_arch(Action::KillProcess).unwrap();
     assert_eq!(Child::run(&filter, || 0), Child::Killed(libc::SIGSYS));
 }
 
@@ -193,7 +193,7 @@ fn empty_architectures_always_take_badarch() {
 fn invalid_updates_preserve_existing_rules() {
     let mut filter = Filter::new_native(Action::Allow).unwrap();
     filter
-        .add_rule(Action::Errno(libc::EACCES as u16), SyscallName::Getpid, vec![])
+        .add_rule(Action::Errno(libc::EACCES as u16), Syscall::Getpid, vec![])
         .unwrap();
     assert!(matches!(
         filter.add_arch(Arch::native().unwrap()),
@@ -203,9 +203,9 @@ fn invalid_updates_preserve_existing_rules() {
         (Action::Errno(4095), vec![]),
         (Action::Allow, vec![]),
         (Action::Errno(8), vec![ArgCmp::eq(u32::MAX, 0)]),
-        (Action::Errno(8), vec![ArgCmp::eq(0, 0), ArgCmp::eq(0, 0)]),
+        (Action::Errno(8), vec![ArgCmp::eq(0, 0), ArgCmp::eq(6, 0)]),
     ] {
-        assert!(filter.add_rule(action, SyscallName::Getppid, conds).is_err());
+        assert!(filter.add_rule(action, Syscall::Getppid, conds).is_err());
     }
     let child = Child::run(&filter, || {
         if !Child::check_getpid([0; 6], true) {
@@ -221,11 +221,11 @@ fn invalid_updates_preserve_existing_rules() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn invalid_badarch_preserves_previous_action() {
+fn invalid_bad_arch_preserves_previous_action() {
     let mut filter = Filter::new(Action::Allow).unwrap();
-    filter.on_badarch(Action::KillProcess).unwrap();
+    filter.on_bad_arch(Action::KillProcess).unwrap();
     assert!(matches!(
-        filter.on_badarch(Action::Errno(4095)),
+        filter.on_bad_arch(Action::Errno(4095)),
         Err(Error::BadAction)
     ));
     assert_eq!(Child::run(&filter, || 0), Child::Killed(libc::SIGSYS));
@@ -237,7 +237,7 @@ fn errno_zero_and_maximum_are_enforced() {
     for errno in [0, 4094] {
         let mut filter = Filter::new_native(Action::Allow).unwrap();
         filter
-            .add_rule(Action::Errno(errno), SyscallName::Getpid, vec![])
+            .add_rule(Action::Errno(errno), Syscall::Getpid, vec![])
             .unwrap();
         let child = Child::run(&filter, || {
             let ret = unsafe { libc::syscall(libc::SYS_getpid) };
@@ -259,7 +259,7 @@ fn errno_zero_and_maximum_are_enforced() {
 fn trace_without_tracer_returns_enosys() {
     let mut filter = Filter::new_native(Action::Allow).unwrap();
     filter
-        .add_rule(Action::Trace(u16::MAX), SyscallName::Getpid, vec![])
+        .add_rule(Action::Trace(u16::MAX), Syscall::Getpid, vec![])
         .unwrap();
     let child = Child::run(&filter, || {
         let ret = unsafe { libc::syscall(libc::SYS_getpid) };
@@ -277,7 +277,7 @@ fn trace_without_tracer_returns_enosys() {
 fn trap_with_maximum_payload_signals() {
     let mut filter = Filter::new_native(Action::Allow).unwrap();
     filter
-        .add_rule(Action::Trap(u16::MAX), SyscallName::Getpid, vec![])
+        .add_rule(Action::Trap(u16::MAX), Syscall::Getpid, vec![])
         .unwrap();
     let child = Child::run(&filter, || {
         unsafe {
@@ -294,7 +294,7 @@ fn six_conditions_in_reverse_order_are_conjoined() {
     let mut filter = Filter::new_native(Action::Allow).unwrap();
     let conds = (0..6).rev().map(|arg| ArgCmp::eq(arg, arg as u64 + 1)).collect();
     filter
-        .add_rule(Action::Errno(libc::EACCES as u16), SyscallName::Getpid, conds)
+        .add_rule(Action::Errno(libc::EACCES as u16), Syscall::Getpid, conds)
         .unwrap();
     let child = Child::run(&filter, || {
         let args = [1, 2, 3, 4, 5, 6];
@@ -507,17 +507,19 @@ fn ordering_is_unsigned() {
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64", target_pointer_width = "64"))]
 #[test]
-fn x86_64_guard_treats_skip_specially() {
-    let mut filter = Filter::new_native(Action::Allow).unwrap();
-    filter.on_badarch(Action::Errno(libc::EACCES as u16)).unwrap();
+fn x86_64_unmatched_syscall_numbers_take_default() {
+    let mut filter = Filter::new_native(Action::Errno(libc::EACCES as u16)).unwrap();
+    filter.on_bad_arch(Action::KillProcess).unwrap();
+    filter.add_rule(Action::Allow, Syscall::Exit, vec![]).unwrap();
+    filter.add_rule(Action::Allow, Syscall::ExitGroup, vec![]).unwrap();
     let child = Child::run(&filter, || {
-        for (i, (nr, errno)) in [
-            (-1, libc::ENOSYS),
-            (-2, libc::EACCES),
-            (i32::MIN, libc::EACCES),
-            (0x3fff_ffff, libc::ENOSYS),
-            (0x4000_0000, libc::EACCES),
-            (i32::MAX, libc::EACCES),
+        for (i, nr) in [
+            -1,
+            -2,
+            i32::MIN,
+            0x3fff_ffff,
+            0x4000_0000,
+            i32::MAX,
         ]
         .iter()
         .enumerate()
@@ -530,7 +532,7 @@ fn x86_64_guard_treats_skip_specially() {
                     0 as libc::c_ulong,
                 )
             };
-            if ret != -1 || Child::errno() != *errno {
+            if ret != -1 || Child::errno() != libc::EACCES {
                 return i as i32 + 1;
             }
         }
@@ -543,7 +545,7 @@ fn x86_64_guard_treats_skip_specially() {
 #[test]
 fn x32_guard_uses_unsigned_syscall_numbers() {
     let mut filter = Filter::new_native(Action::Allow).unwrap();
-    filter.on_badarch(Action::Errno(libc::EACCES as u16)).unwrap();
+    filter.on_bad_arch(Action::Errno(libc::EACCES as u16)).unwrap();
     let child = Child::run(&filter, || {
         for (i, (nr, errno)) in [
             (-1, libc::ENOSYS),
@@ -585,7 +587,7 @@ fn x86_64_and_x32_dispatch_in_either_order() {
         filter
             .add_rule(
                 Action::Errno(libc::EACCES as u16),
-                SyscallName::Getpid,
+                Syscall::Getpid,
                 vec![ArgCmp::eq(0, 7)],
             )
             .unwrap();
@@ -607,7 +609,7 @@ fn x86_64_and_x32_dispatch_in_either_order() {
 fn socket_rule_covers_direct_and_multiplexed_calls() {
     let mut filter = Filter::new_native(Action::Allow).unwrap();
     filter
-        .add_rule(Action::Errno(libc::EACCES as u16), SyscallName::Socket, vec![])
+        .add_rule(Action::Errno(libc::EACCES as u16), Syscall::Socket, vec![])
         .unwrap();
     let child = Child::run(&filter, || unsafe {
         let args = [0 as libc::c_ulong; 3];
@@ -638,7 +640,7 @@ fn conditional_socket_rule_only_covers_direct_call() {
     filter
         .add_rule(
             Action::Errno(libc::EACCES as u16),
-            SyscallName::Socket,
+            Syscall::Socket,
             vec![ArgCmp::eq(0, 1)],
         )
         .unwrap();
@@ -676,7 +678,7 @@ fn ipc_rule_checks_the_full_low_word_of_selector() {
     let semget: libc::c_long = 393;
     let mut filter = Filter::new_native(Action::Allow).unwrap();
     filter
-        .add_rule(Action::Errno(libc::EACCES as u16), SyscallName::Semget, vec![])
+        .add_rule(Action::Errno(libc::EACCES as u16), Syscall::Semget, vec![])
         .unwrap();
     let child = Child::run(&filter, || unsafe {
         if libc::syscall(
@@ -719,7 +721,7 @@ fn unavailable_syscall_does_not_alias_another_number() {
     let mut filter = Filter::new_native(Action::Allow).unwrap();
     filter.add_arch(Arch::X86_64).unwrap();
     filter
-        .add_rule(Action::Errno(libc::EACCES as u16), SyscallName::Open, vec![])
+        .add_rule(Action::Errno(libc::EACCES as u16), Syscall::Open, vec![])
         .unwrap();
     let child = Child::run(&filter, || unsafe {
         // The x86_64 open number is io_submit on aarch64.
@@ -757,7 +759,7 @@ fn long_rule_chains_preserve_matches_and_fallthrough() {
         filter
             .add_rule(
                 Action::Errno(libc::EACCES as u16),
-                SyscallName::Getpid,
+                Syscall::Getpid,
                 vec![ArgCmp::eq(0, val)],
             )
             .unwrap();
@@ -798,7 +800,7 @@ fn allow_all() {
 fn errno_on_getpid() {
     let mut filter = Filter::new_native(Action::Allow).unwrap();
     filter
-        .add_rule(Action::Errno(libc::EPERM as u16), SyscallName::Getpid, vec![])
+        .add_rule(Action::Errno(libc::EPERM as u16), Syscall::Getpid, vec![])
         .unwrap();
     let child = Child::run(&filter, || unsafe {
         if libc::syscall(libc::SYS_getpid) != -1 {
@@ -822,7 +824,7 @@ fn errno_on_first_argument() {
     let mut filter = Filter::new_native(Action::Allow).unwrap();
     let conds = vec![ArgCmp::eq(0, 42)];
     filter
-        .add_rule(Action::Errno(libc::EPERM as u16), SyscallName::Lseek, conds)
+        .add_rule(Action::Errno(libc::EPERM as u16), Syscall::Lseek, conds)
         .unwrap();
     let child = Child::run(&filter, || {
         // `lseek` on a descriptor nothing opened, which the kernel refuses with EBADF.
@@ -852,7 +854,7 @@ fn errno_on_first_argument() {
 fn kill_process_on_getppid() {
     let mut filter = Filter::new_native(Action::Allow).unwrap();
     filter
-        .add_rule(Action::KillProcess, SyscallName::Getppid, vec![])
+        .add_rule(Action::KillProcess, Syscall::Getppid, vec![])
         .unwrap();
     let child = Child::run(&filter, || unsafe {
         libc::syscall(libc::SYS_getppid);
@@ -869,7 +871,7 @@ fn errno_on_high_word_of_argument() {
     let mut filter = Filter::new_native(Action::Allow).unwrap();
     let conds = vec![ArgCmp::eq(1, 0x1_0000_0000)];
     filter
-        .add_rule(Action::Errno(libc::EPERM as u16), SyscallName::Lseek, conds)
+        .add_rule(Action::Errno(libc::EPERM as u16), Syscall::Lseek, conds)
         .unwrap();
     let child = Child::run(&filter, || {
         // `lseek` on a descriptor nothing opened, which the kernel refuses with EBADF.
@@ -893,10 +895,10 @@ fn errno_on_high_word_of_argument() {
     assert_eq!(child, Child::Exited(0));
 }
 
-/// An event from an architecture the filter leaves out takes `act_badarch`.
+/// An event from an architecture the filter leaves out takes `act_bad_arch`.
 #[cfg(target_os = "linux")]
 #[test]
-fn badarch_kills() {
+fn bad_arch_kills() {
     let absent = if Arch::native().unwrap() == Arch::X86 {
         Arch::Aarch64
     } else {
@@ -904,7 +906,7 @@ fn badarch_kills() {
     };
     let mut filter = Filter::new(Action::Allow).ok().unwrap();
     filter.add_arch(absent).ok().unwrap();
-    filter.on_badarch(Action::KillProcess).ok().unwrap();
+    filter.on_bad_arch(Action::KillProcess).ok().unwrap();
     let child = Child::run(&filter, || unsafe {
         libc::syscall(libc::SYS_getpid);
         0
@@ -931,7 +933,7 @@ fn duplicate_arch() {
 fn rule_repeats_default() {
     let mut filter = Filter::new_native(Action::Allow).unwrap();
     assert!(filter
-        .add_rule(Action::Allow, SyscallName::Getpid, vec![])
+        .add_rule(Action::Allow, Syscall::Getpid, vec![])
         .is_err());
 }
 
@@ -940,7 +942,7 @@ fn rule_repeats_default() {
 fn repeated_argument_conditions_compile() {
     let mut filter = Filter::new_native(Action::Allow).unwrap();
     let conds = vec![ArgCmp::eq(1, 0), ArgCmp::ne(1, 1)];
-    filter.add_rule(Action::Errno(1), SyscallName::Lseek, conds).unwrap();
+    filter.add_rule(Action::Errno(1), Syscall::Lseek, conds).unwrap();
     assert!(filter.to_cbpf().is_ok());
 }
 
@@ -950,37 +952,36 @@ fn argument_out_of_range() {
     let mut filter = Filter::new_native(Action::Allow).unwrap();
     let conds = vec![ArgCmp::eq(6, 0)];
     assert!(matches!(
-        filter.add_rule(Action::Errno(1), SyscallName::Lseek, conds),
+        filter.add_rule(Action::Errno(1), Syscall::Lseek, conds),
         Err(Error::ArgumentOutOfRange(6)),
     ));
 }
 
 #[test]
 fn rule_checks_condition_indices() {
-    let attrs = Attrs::default();
     let rule = |conds| Rule {
         action: Action::Allow,
-        syscall: Syscall::Name(SyscallName::Getpid),
+        syscall: Syscall::Getpid,
         conds,
         exact: false,
     };
-    assert!(rule(vec![]).check(&attrs).is_ok());
+    assert!(rule(vec![]).check().is_ok());
     assert!(rule((0..6).rev().map(|arg| ArgCmp::eq(arg, 0)).collect())
-        .check(&attrs)
+        .check()
         .is_ok());
     assert!(rule((0..7).map(|arg| ArgCmp::eq(arg % 6, 0)).collect())
-        .check(&attrs)
+        .check()
         .is_ok());
     assert!(matches!(
-        rule((0..7).map(|arg| ArgCmp::eq(arg, 0)).collect()).check(&attrs),
+        rule((0..7).map(|arg| ArgCmp::eq(arg, 0)).collect()).check(),
         Err(Error::ArgumentOutOfRange(6)),
     ));
     assert!(matches!(
-        rule(vec![ArgCmp::eq(u32::MAX, 0)]).check(&attrs),
+        rule(vec![ArgCmp::eq(u32::MAX, 0)]).check(),
         Err(Error::ArgumentOutOfRange(u32::MAX)),
     ));
     assert!(rule(vec![ArgCmp::eq(5, 0), ArgCmp::eq(0, 0), ArgCmp::ne(5, 1)])
-        .check(&attrs)
+        .check()
         .is_ok());
 }
 
@@ -1009,51 +1010,36 @@ fn action_checks_return_validation_errors() {
 
 #[test]
 fn rule_checks_propagate_validation_errors() {
-    let attrs = Attrs {
-        act_default: Action::Allow,
-        ..Attrs::default()
-    };
     let rule = |action, conds| Rule {
         action,
-        syscall: Syscall::Name(SyscallName::Getpid),
+        syscall: Syscall::Getpid,
         conds,
         exact: false,
     };
-    assert!(rule(Action::Errno(1), vec![]).check(&attrs).is_ok());
+    assert!(rule(Action::Errno(1), vec![]).check().is_ok());
     assert!(matches!(
-        rule(Action::Errno(4095), vec![]).check(&attrs),
+        rule(Action::Errno(4095), vec![]).check(),
         Err(Error::BadAction)
     ));
     assert!(matches!(
-        rule(Action::Allow, vec![]).check(&attrs),
+        Filter::new_native(Action::Allow).unwrap().add_rule(Action::Allow, Syscall::Getpid, vec![]),
         Err(Error::ActionIsDefault)
     ));
     assert!(matches!(
-        rule(Action::Errno(1), (0..7).map(|arg| ArgCmp::eq(arg, 0)).collect()).check(&attrs),
+        rule(Action::Errno(1), (0..7).map(|arg| ArgCmp::eq(arg, 0)).collect()).check(),
         Err(Error::ArgumentOutOfRange(6)),
     ));
     assert!(matches!(
-        rule(Action::Errno(1), vec![ArgCmp::eq(6, 0)]).check(&attrs),
+        rule(Action::Errno(1), vec![ArgCmp::eq(6, 0)]).check(),
         Err(Error::ArgumentOutOfRange(6)),
     ));
     assert!(rule(Action::Errno(1), vec![ArgCmp::eq(1, 0), ArgCmp::ne(1, 1)])
-        .check(&attrs)
+        .check()
         .is_ok());
 }
 
 #[test]
-fn skip_rule_requires_tskip() {
-    let mut attrs = Attrs {
-        act_default: Action::Allow,
-        ..Attrs::default()
-    };
-    let rule = Rule {
-        action: Action::Errno(1),
-        syscall: Syscall::Skip,
-        conds: vec![ArgCmp::eq(5, 0)],
-        exact: true,
-    };
-    assert!(matches!(rule.check(&attrs), Err(Error::SkipNotEnabled)));
-    attrs.api_tskip = true;
-    assert!(rule.check(&attrs).is_ok());
+fn skip_rule_is_allowed() {
+    let mut filter = Filter::new_native(Action::Allow).unwrap();
+    assert!(filter.add_rule(Action::Errno(1), Syscall::Skip, vec![ArgCmp::eq(5, 0)]).is_ok());
 }

@@ -42,47 +42,14 @@ pub struct Rule {
     pub exact: bool,
 }
 
-/// Filter attributes, `enum scmp_filter_attr` (`struct db_filter_attr`).
-pub struct Attrs {
-    /// Default action when no rule matches.
-    pub act_default: Action,
-    /// Default action when the syscall's architecture is not supported by the policy.
-    pub act_badarch: Action,
-    /// Set `no_new_privs` before installing the filter.
-    pub ctl_nnp: bool,
-    /// Synchronize the installed filter across all threads.
-    pub ctl_tsync: bool,
-    /// Allow rules for syscall number -1 (`Syscall::Skip`).
-    pub api_tskip: bool,
-    /// Request logging of all filter actions except `Allow`.
-    pub ctl_log: bool,
-    /// Disable speculative store bypass mitigations.
-    pub ctl_ssb: bool,
-    // TODO: notification related flags.
-    // pub api_sysrawrc: bool,
-    // pub ctl_waitkill: bool,
-}
-
 /// A whole filter context (`scmp_filter_ctx`), viewed declaratively.
 pub struct Policy {
-    pub attrs: Attrs,
     pub archs: Vec<Arch>,
     pub rules: Vec<Rule>,
-}
-
-impl Default for Attrs {
-    fn default() -> Self {
-        Attrs {
-            // seccomp_init's argument
-            act_default: Action::KillThread,
-            act_badarch: Action::KillThread,
-            ctl_nnp: true,
-            ctl_tsync: false,
-            api_tskip: false,
-            ctl_log: false,
-            ctl_ssb: false,
-        }
-    }
+    /// Default action when the arch is supported but no rule matches.
+    pub act_no_match: Action,
+    /// Default action when the arch is not supported.
+    pub act_bad_arch: Action,
 }
 
 impl Action {
@@ -122,7 +89,7 @@ impl Rule {
     pub const ARG_COUNT_MAX: u32 = 6;
 
     /// Conditions required to validate and compile a rule.
-    pub open spec fn wf(self, attrs: Attrs) -> bool {
+    pub open spec fn wf(self) -> bool {
         &&& self.action.wf()
         &&& forall |i: int| #![trigger self.conds@[i]]
                 0 <= i < self.conds@.len() ==> self.conds@[i].arg < Self::ARG_COUNT_MAX
@@ -136,11 +103,11 @@ impl Policy {
     }
 
     pub open spec fn wf(self) -> bool {
-        &&& self.attrs.act_default.wf()
-        &&& self.attrs.act_badarch.wf()
+        &&& self.act_no_match.wf()
+        &&& self.act_bad_arch.wf()
         &&& self.archs_wf()
         &&& forall |i: int| #![trigger self.rules@[i]]
-                0 <= i < self.rules@.len() ==> self.rules@[i].wf(self.attrs)
+                0 <= i < self.rules@.len() ==> self.rules@[i].wf()
     }
 }
 
@@ -318,7 +285,7 @@ impl Policy {
         recommends self.wf(),
     {
         // The event is not from an active arch.
-        ||| act == self.attrs.act_badarch && forall |a: Arch| !self.is_active_arch(a, ev)
+        ||| act == self.act_bad_arch && forall |a: Arch| !self.is_active_arch(a, ev)
         // Exists a rule that, when evaluated on an active arch, matches the event and has the action `act`.
         ||| exists |a: Arch, i: int| {
             &&& self.is_active_arch(a, ev)
@@ -346,7 +313,7 @@ impl Policy {
         }
         // Take the default action when no rule matches on any active arch.
         ||| {
-            &&& act == self.attrs.act_default
+            &&& act == self.act_no_match
             &&& exists |a: Arch| #[trigger] self.is_active_arch(a, ev)
             &&& forall |a: Arch, i: int|
                     self.is_active_arch(a, ev) && 0 <= i < self.rules@.len()

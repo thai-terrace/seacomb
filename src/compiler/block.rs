@@ -169,7 +169,7 @@ impl Policy {
     /// ```text
     ///     <architecture guard> -> end
     ///     <rules by descending precedence and descending index>
-    ///     ret #act_default
+    ///     ret #act_no_match
     /// end:
     /// ```
     pub(super) fn emit_arch_block(&self, b: &mut Builder, arch: Arch) -> (res: Result<(), CompileError>)
@@ -189,8 +189,8 @@ impl Policy {
         }
         let end = b.label();
         let ghost prev = b.rev@;
-        b.emit(Instr::Ret(RetVal::K(self.attrs.act_default.to_ret())))?;
-        proof { Builder::lemma_ret(b.rev@, self.attrs.act_default.to_ret()); }
+        b.emit(Instr::Ret(RetVal::K(self.act_no_match.to_ret())))?;
+        proof { Builder::lemma_ret(b.rev@, self.act_no_match.to_ret()); }
         self.emit_arch(b, arch)?;
         let ghost body = b.rev@;
         arch.emit_guard(b, end)?;
@@ -223,7 +223,7 @@ impl Policy {
         requires
             self.wf(), 0 < b.rev@.len(), b.wf(),
             forall |data: &[u8]| #[trigger] Builder::returns_all(b.rev@, data, b.rev@.len(),
-                self.attrs.act_default.to_ret()),
+                self.act_no_match.to_ret()),
         ensures
             Builder::extends(old(b).rev@, final(b).rev@),
             final(b).wf(),
@@ -239,7 +239,7 @@ impl Policy {
             assert forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE implies
                 #[trigger] Builder::returns(b.rev@, data, b.rev@.len(), Event::of(data).nr as u32,
                     self.dispatch(arch, Event::of(data), -1, self.rules@.len() as int).to_ret()) by {
-                assert(Builder::returns_all(b.rev@, data, b.rev@.len(), self.attrs.act_default.to_ret()));
+                assert(Builder::returns_all(b.rev@, data, b.rev@.len(), self.act_no_match.to_ret()));
             }
         }
         while priority <= 8
@@ -274,7 +274,7 @@ impl Policy {
                             self.dispatch(arch, Event::of(data), priority as int, i as int).to_ret()),
                 decreases self.rules@.len() - i
             {
-                assert(self.rules@[i as int].wf(self.attrs));
+                assert(self.rules@[i as int].wf());
                 let ghost prev = b.rev@;
                 let ghost rule = self.rules@[i as int];
                 if self.rules[i].action.priority() == priority {

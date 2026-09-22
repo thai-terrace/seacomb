@@ -129,7 +129,7 @@ impl Policy {
         decreases priority + 1, i
     {
         if priority < 0 {
-            self.attrs.act_default
+            self.act_no_match
         } else if i <= 0 {
             self.dispatch(arch, ev, priority - 1, self.rules@.len() as int)
         } else if self.rules@[i - 1].action.precedence() == priority
@@ -145,7 +145,7 @@ impl Policy {
         decreases self.archs@.len() - i
     {
         if i >= self.archs@.len() {
-            self.attrs.act_badarch
+            self.act_bad_arch
         } else if self.takes(self.archs@[i], ev) {
             self.dispatch(self.archs@[i], ev, 8, self.rules@.len() as int)
         } else {
@@ -166,7 +166,7 @@ impl Policy {
                         &&& self.rules@[k].action.precedence() <= self.rules@[j].action.precedence()
                         &&& self.rules@[k].action.precedence() == self.rules@[j].action.precedence() ==> k <= j
                     }
-            }) || (self.dispatch(arch, ev, priority, i) == self.attrs.act_default
+            }) || (self.dispatch(arch, ev, priority, i) == self.act_no_match
                 && (forall |j: int| self.included(j, priority, i)
                     ==> !#[trigger] self.rules@[j].group_matches(arch, self.archs@.contains(Arch::X32), ev))),
         decreases priority + 1, i
@@ -314,8 +314,8 @@ impl Policy {
         requires self.wf(), self.eval(ev, act)
         ensures
             (exists |a: Arch, i: int| #[trigger] self.wins(ev, a, i) && self.rules@[i].action == act)
-            || (act == self.attrs.act_badarch && forall |a: Arch| !self.is_active_arch(a, ev))
-            || (act == self.attrs.act_default && exists |a: Arch| self.is_active_arch(a, ev)),
+            || (act == self.act_bad_arch && forall |a: Arch| !self.is_active_arch(a, ev))
+            || (act == self.act_no_match && exists |a: Arch| self.is_active_arch(a, ev)),
     {
         if exists |a: Arch, i: int| self.is_active_arch(a, ev)
             && 0 <= i < self.rules@.len() && #[trigger] self.rules@[i].eval(a, ev) {

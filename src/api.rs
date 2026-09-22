@@ -15,8 +15,6 @@ pub enum Error {
     ActionIsDefault,
     /// A condition uses an argument index outside zero through five.
     ArgumentOutOfRange(u32),
-    /// A skip rule requires the skip-syscall option to be enabled.
-    SkipNotEnabled,
     /// The filter already includes this architecture.
     DuplicateArch,
     /// The native architecture is not supported.
@@ -114,9 +112,9 @@ impl Action {
 }
 
 impl Rule {
-    /// Checks whether this rule is valid for the given filter attributes.
-    pub fn check(&self, _attrs: &Attrs) -> (res: Result<(), Error>)
-        ensures (res is Ok) == self.wf(*_attrs)
+    /// Checks whether this rule has a valid action and argument indices.
+    pub fn check(&self) -> (res: Result<(), Error>)
+        ensures (res is Ok) == self.wf()
     {
         self.action.check()?;
         let mut i: usize = 0;
@@ -137,49 +135,61 @@ impl Rule {
     }
 }
 
-/// A policy under construction, which only its own methods can extend.
+/// A policy under construction and its filter options.
 pub struct Filter {
-    policy: Policy,
+    pub policy: Policy,
+    /// Set `no_new_privs` before installing the filter.
+    pub ctl_nnp: bool,
+    /// Synchronize the installed filter across all threads.
+    pub ctl_tsync: bool,
+    /// Request logging of all filter actions except `Allow`.
+    pub ctl_log: bool,
+    // TODO: notification related flags.
+    // pub api_sysrawrc: bool,
+    // pub ctl_waitkill: bool,
 }
 
 impl Filter {
-    /// The policy this filter has collected.
-    pub closed spec fn policy(self) -> Policy {
-        self.policy
-    }
-
     /// Whether the collected policy is well-formed.
     pub open spec fn wf(self) -> bool {
-        self.policy().wf()
+        self.policy.wf()
     }
 
-    /// Creates a filter with default action `act_default` and no architectures enabled.
-    pub fn new(act_default: Action) -> (res: Result<Filter, Error>)
+    /// Creates a filter with default action `act_no_match` and no architectures enabled.
+    pub fn new(act_no_match: Action) -> (res: Result<Filter, Error>)
         ensures res matches Ok(f) ==> {
             &&& f.wf()
-            &&& f.policy().attrs.act_default == act_default
-            &&& f.policy().archs@.len() == 0
+            &&& f.policy.act_no_match == act_no_match
+            &&& f.policy.act_bad_arch == Action::KillThread
+            &&& f.policy.archs@.len() == 0
+            &&& f.policy.rules@.len() == 0
         }
     {
-        act_default.check()?;
+        act_no_match.check()?;
         Ok(Filter {
             policy: Policy {
-                attrs: Attrs { act_default, act_badarch: Action::KillThread, ..Attrs::default() },
                 archs: Vec::new(),
                 rules: Vec::new(),
+                act_no_match,
+                act_bad_arch: Action::KillThread,
             },
+            ctl_nnp: true,
+            ctl_tsync: false,
+            ctl_log: false,
         })
     }
 
-    /// Creates a filter over the running architecture with default action `act_default`.
-    pub fn new_native(act_default: Action) -> (res: Result<Filter, Error>)
+    /// Creates a filter over the running architecture with default action `act_no_match`.
+    pub fn new_native(act_no_match: Action) -> (res: Result<Filter, Error>)
         ensures res matches Ok(f) ==> {
             &&& f.wf()
-            &&& f.policy().attrs.act_default == act_default
-            &&& f.policy().archs@.len() == 1
+            &&& f.policy.act_no_match == act_no_match
+            &&& f.policy.act_bad_arch == Action::KillThread
+            &&& f.policy.archs@.len() == 1
+            &&& f.policy.rules@.len() == 0
         }
     {
-        let mut filter = Self::new(act_default)?;
+        let mut filter = Self::new(act_no_match)?;
         filter.add_arch(Arch::native()?)?;
         Ok(filter)
     }
@@ -189,8 +199,10 @@ impl Filter {
         requires old(self).wf()
         ensures
             final(self).wf(),
-            final(self).policy().attrs == old(self).policy().attrs,
-            res is Ok ==> final(self).policy().archs@ == old(self).policy().archs@.push(arch),
+            final(self).policy.act_no_match == old(self).policy.act_no_match,
+            final(self).policy.act_bad_arch == old(self).policy.act_bad_arch,
+            final(self).policy.rules == old(self).policy.rules,
+            res is Ok ==> final(self).policy.archs@ == old(self).policy.archs@.push(arch),
     {
         let mut i: usize = 0;
         while i < self.policy.archs.len()
@@ -228,20 +240,22 @@ impl Filter {
         requires old(self).wf()
         ensures
             final(self).wf(),
-            res is Ok ==> final(self).policy().rules@ == old(self).policy().rules@.push(
+            res is Ok ==> final(self).policy.rules@ == old(self).policy.rules@.push(
                 Rule { action, syscall, conds, exact: false }),
     {
         let rule = Rule { action, syscall, conds, exact: false };
-        rule.check(&self.policy.attrs)?;
+        rule.check()?;
+        if rule.action.to_ret() == self.policy.act_no_match.to_ret() {
+            return Err(Error::ActionIsDefault);
+        }
 
         let ghost prev = self.policy.rules@;
-        let ghost attrs = self.policy.attrs;
         self.policy.rules.push(rule);
         proof {
             assert forall |k: int| 0 <= k < self.policy.rules@.len()
-                implies #[trigger] self.policy.rules@[k].wf(attrs) by {
+                implies #[trigger] self.policy.rules@[k].wf() by {
                 if k < prev.len() {
-                    assert(prev[k].wf(attrs));
+                    assert(prev[k].wf());
                 }
             }
         }
@@ -249,22 +263,37 @@ impl Filter {
     }
 
     /// Sets the action for syscalls from architectures this filter does not cover.
-    pub fn on_badarch(&mut self, act_badarch: Action) -> (res: Result<(), Error>)
+    pub fn on_bad_arch(&mut self, act: Action) -> (res: Result<(), Error>)
         requires old(self).wf()
         ensures
             final(self).wf(),
-            res is Ok ==> final(self).policy().attrs.act_badarch == act_badarch,
+            res is Ok ==> final(self).policy.act_bad_arch == act,
     {
-        act_badarch.check()?;
-        let ghost attrs = self.policy.attrs;
-        self.policy.attrs.act_badarch = act_badarch;
-        proof {
-            assert forall |k: int| 0 <= k < self.policy.rules@.len()
-                implies #[trigger] self.policy.rules@[k].wf(self.policy.attrs) by {
-                assert(self.policy.rules@[k].wf(attrs));
-            }
-        }
+        act.check()?;
+        self.policy.act_bad_arch = act;
         Ok(())
+    }
+
+    /// Skips setting `no_new_privs` during filter installation.
+    pub fn allow_new_privileges(&mut self)
+        ensures final(self).policy == old(self).policy
+    {
+        self.ctl_nnp = false;
+    }
+
+    /// When installing, set all threads in this process to use the same seccomp filter chain.
+    pub fn enable_thread_sync(&mut self)
+        ensures final(self).policy == old(self).policy
+    {
+        self.ctl_tsync = true;
+    }
+
+    /// Requests kernel audit records for non-allow actions when installing the filter
+    /// (requires `auditd` and [ausearch(8)](https://man7.org/linux/man-pages/man8/ausearch.8.html) to view logs).
+    pub fn request_audit_logging(&mut self)
+        ensures final(self).policy == old(self).policy
+    {
+        self.ctl_log = true;
     }
 
     /// Compiles this filter into a classic BPF program.
@@ -276,7 +305,7 @@ impl Filter {
             // Compiled program runs error-free and produces an action accepted by the policy.
             forall |data: &[u8]| #[trigger] Event::parse(data) matches Some(ev) ==> {
                 &&& prog.eval(data) matches Outcome::Return(ret)
-                &&& self.policy().eval(ev, Action::from_ret(ret))
+                &&& self.policy.eval(ev, Action::from_ret(ret))
             }
     {
         self.policy.to_cbpf()
@@ -288,7 +317,7 @@ impl Filter {
         requires self.wf()
     {
         match self.to_cbpf() {
-            Ok(prog) => prog.install(&self.policy.attrs),
+            Ok(prog) => prog.install(self),
             Err(err) => Err(Error::Compile(err)),
         }
     }
@@ -304,13 +333,12 @@ impl Error {
 }
 
 #[cfg(target_os = "linux")]
-impl Attrs {
+impl Filter {
     /// The `SECCOMP_FILTER_FLAG_*` bits in `linux/seccomp.h`.
     const FLAG_TSYNC: u64 = 1 << 0;
     const FLAG_LOG: u64 = 1 << 1;
-    const FLAG_SPEC_ALLOW: u64 = 1 << 2;
 
-    /// The flag word these attributes ask `seccomp(2)` for.
+    /// Generates a flag for `seccomp(2)`
     fn filter_flags(&self) -> u64 {
         let mut flags: u64 = 0;
         if self.ctl_tsync {
@@ -319,40 +347,37 @@ impl Attrs {
         if self.ctl_log {
             flags = flags | Self::FLAG_LOG;
         }
-        if self.ctl_ssb {
-            flags = flags | Self::FLAG_SPEC_ALLOW;
-        }
         flags
     }
 }
 
 #[cfg(target_os = "linux")]
 impl Program {
-    /// Loads this program into the calling thread as its seccomp filter.
+    /// Loads this program using the filter's installation options.
     #[verifier::external_body]
-    pub fn install(&self, attrs: &Attrs) -> Result<(), Error> {
+    pub fn install(&self, filter: &Filter) -> Result<(), Error> {
         // `seccomp()` answers EACCES to a thread that holds neither CAP_SYS_ADMIN nor
         // `no_new_privs`, so `ctl_nnp` goes in first.
-        if attrs.ctl_nnp {
+        if filter.ctl_nnp {
             let rc = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
             if rc != 0 {
                 return Err(Error::NoNewPrivs(Error::errno()));
             }
         }
 
-        let mut filter: Vec<_> = self.assemble();
+        let mut instrs: Vec<_> = self.assemble();
 
         // The kernel copies the program out of `sock_fprog` before it returns, so the
         // buffer only has to outlive the call.
         let fprog = libc::sock_fprog {
-            len: filter.len() as u16,
-            filter: filter.as_mut_ptr() as *mut libc::sock_filter,
+            len: instrs.len() as u16,
+            filter: instrs.as_mut_ptr() as *mut libc::sock_filter,
         };
         let rc = unsafe {
             libc::syscall(
                 libc::SYS_seccomp,
                 libc::SECCOMP_SET_MODE_FILTER as libc::c_ulong,
-                attrs.filter_flags() as libc::c_ulong,
+                filter.filter_flags() as libc::c_ulong,
                 &fprog as *const libc::sock_fprog,
             )
         };
