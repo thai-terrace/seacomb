@@ -15,7 +15,7 @@ use builder::Builder;
 
 verus! {
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompileError {
     /// The compiled program exceeds the jump offset limit.
     JmpIdxOverflow,

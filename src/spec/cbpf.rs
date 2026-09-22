@@ -5,22 +5,25 @@ use vstd::prelude::*;
 // Syntax
 verus! {
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Structural)]
 pub enum Src { K(u32), X }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Structural)]
 pub enum RetVal { K(u32), A }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Structural)]
 pub enum AluOp {
     Add = 0x00, Sub = 0x10, Mul = 0x20, Div = 0x30, Or = 0x40,
     And = 0x50, Lsh = 0x60, Rsh = 0x70, Xor = 0xa0,
 }
 
 /// Comparison of a conditional jump (`BPF_OP` of class `BPF_JMP`, except `BPF_JA`).
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Structural)]
 pub enum JmpOp { Eq = 0x10, Gt = 0x20, Ge = 0x30, Set = 0x40 }
 
 /// `struct sock_filter`, restricted to the codes accepted by `seccomp_check_filter()`:
 /// <https://github.com/torvalds/linux/blob/40288c9206c17eb66a603262e06a58d300d0f279/kernel/seccomp.c#L286-L343>
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Structural)]
 pub enum Instr {
     /// `BPF_LD | BPF_W | BPF_ABS`: `A = *(u32 *)((char *)&seccomp_data + k)`.
     LdAbs(u32),
@@ -57,6 +60,9 @@ pub enum Instr {
 }
 
 /// `struct sock_fprog`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+// Verus does not yet model non-Copy Clone derives.
+#[verifier::external_derive(Clone)]
 pub struct Program {
     pub instrs: Vec<Instr>,
 }
@@ -101,6 +107,7 @@ impl Program {
 // Semantics
 verus! {
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Structural)]
 pub enum Outcome {
     Return(u32),
     RuntimeError,

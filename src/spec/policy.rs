@@ -7,10 +7,11 @@ use super::syscall::*;
 verus! {
 
 /// Architecture tokens `SCMP_ARCH_*` (excluding `SCMP_ARCH_NATIVE`).
-#[derive(Clone, Copy, PartialEq, Eq, Structural)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Structural)]
 pub enum Arch { X86, X86_64, Arm, Aarch64 }
 
 /// Filter actions (`SCMP_ACT_*`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Structural)]
 pub enum Action {
     KillProcess,
     KillThread,
@@ -23,9 +24,11 @@ pub enum Action {
 }
 
 /// Comparison operators `scmp_compare`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Structural)]
 pub enum Compare { Ne, Lt, Le, Eq, Ge, Gt, MaskedEq }
 
 /// One argument test `scmp_arg_cmp`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Structural)]
 pub struct ArgCmp {
     pub arg: u32,
     pub op: Compare,
@@ -34,16 +37,20 @@ pub struct ArgCmp {
     pub b: u64,
 }
 
-/// One `seccomp_rule_add[_exact][_array]` call.
+/// One policy rule
+#[derive(Debug, Clone, PartialEq, Eq)]
+// Verus does not yet model non-Copy Clone derives.
+#[verifier::external_derive(Clone)]
 pub struct Rule {
     pub action: Action,
     pub syscall: Syscall,
     pub conds: Vec<ArgCmp>,
-    /// `true` for the `_exact` variants (fail instead of adapting the rule per arch).
-    pub exact: bool,
 }
 
-/// A whole filter context (`scmp_filter_ctx`), viewed declaratively.
+/// A set of rules with default actions for no-match and bad-arch cases.
+#[derive(Debug, Clone, PartialEq, Eq)]
+// Verus does not yet model non-Copy Clone derives.
+#[verifier::external_derive(Clone)]
 pub struct Policy {
     pub archs: Vec<Arch>,
     pub rules: Vec<Rule>,
@@ -54,13 +61,13 @@ pub struct Policy {
 }
 
 impl Action {
-    /// `src/system.h`: largest errno accepted by SCMP_ACT_ERRNO
+    /// Largest errno Linux returns for `SECCOMP_RET_ERRNO` (`include/linux/err.h`).
     pub const MAX_ERRNO: u32 = 4095;
 
-    /// `sys_chk_seccomp_action` (kernel-support probing aside).
+    /// Whether the action's payload can be returned without kernel clamping.
     pub open spec fn wf(self) -> bool {
         match self {
-            Action::Errno(e) => (e as u32) < Self::MAX_ERRNO,
+            Action::Errno(e) => (e as u32) <= Self::MAX_ERRNO,
             _ => true,
         }
     }
@@ -121,6 +128,7 @@ pub struct Event {
 }
 
 /// Results of matching a syscall name against an event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Structural)]
 pub enum SyscallMatch {
     Exact,
     /// Matches a `socketcall` or `ipc` call.

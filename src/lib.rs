@@ -24,7 +24,7 @@ pub use crate::compiler::CompileError;
 verus! {
 
 /// An error while creating, updating, compiling, or installing a filter.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
     /// Invalid errno number.
     InvalidErrno,
@@ -104,7 +104,7 @@ impl Action {
         ensures (res is Ok) == self.wf()
     {
         match self {
-            Action::Errno(e) if (*e as u32) >= Self::MAX_ERRNO => Err(Error::InvalidErrno),
+            Action::Errno(e) if (*e as u32) > Self::MAX_ERRNO => Err(Error::InvalidErrno),
             _ => Ok(()),
         }
     }
@@ -135,6 +135,9 @@ impl Rule {
 }
 
 /// A policy under construction and its filter options.
+#[derive(Debug, Clone, PartialEq, Eq)]
+// Verus does not yet model non-Copy Clone derives.
+#[verifier::external_derive(Clone)]
 pub struct Filter {
     policy: Policy,
     /// Set `no_new_privs` before installing the filter.
@@ -246,10 +249,10 @@ impl Filter {
             final(self).policy().act_bad_arch == old(self).policy().act_bad_arch,
             res is Ok ==>
                 final(self).policy().rules@
-                == old(self).policy().rules@.push(Rule { action, syscall, conds, exact: false }),
+                == old(self).policy().rules@.push(Rule { action, syscall, conds }),
             res is Err ==> final(self).policy() == old(self).policy(),
     {
-        let rule = Rule { action, syscall, conds, exact: false };
+        let rule = Rule { action, syscall, conds };
         rule.check()?;
         // NOTE: libseccomp enforces that the action cannot be the default action,
         // but we do not have that restriction.
@@ -285,14 +288,18 @@ impl Filter {
 
     /// Skips setting `no_new_privs` during filter installation.
     pub fn allow_new_privileges(&mut self)
-        ensures final(self).policy() == old(self).policy()
+        ensures
+            final(self).wf() == old(self).wf(),
+            final(self).policy() == old(self).policy(),
     {
         self.ctl_nnp = false;
     }
 
     /// When installing, set all threads in this process to use the same seccomp filter chain.
     pub fn enable_thread_sync(&mut self)
-        ensures final(self).policy() == old(self).policy()
+        ensures
+            final(self).wf() == old(self).wf(),
+            final(self).policy() == old(self).policy(),
     {
         self.ctl_tsync = true;
     }
@@ -300,7 +307,9 @@ impl Filter {
     /// Requests kernel audit records for non-allow actions when installing the filter
     /// (requires `auditd` and [ausearch(8)](https://man7.org/linux/man-pages/man8/ausearch.8.html) to view logs).
     pub fn request_audit_logging(&mut self)
-        ensures final(self).policy() == old(self).policy()
+        ensures
+            final(self).wf() == old(self).wf(),
+            final(self).policy() == old(self).policy(),
     {
         self.ctl_log = true;
     }

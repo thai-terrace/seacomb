@@ -66,6 +66,7 @@ syscalls! {
     ///   and [ARM-specific numbers](https://github.com/torvalds/linux/blob/v7.0/arch/arm/include/uapi/asm/unistd.h)
     /// - [AArch64 table](https://github.com/torvalds/linux/blob/v7.0/scripts/syscall.tbl),
     ///   with [ABI selection](https://github.com/torvalds/linux/blob/v7.0/arch/arm64/kernel/Makefile.syscalls)
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Structural)]
     pub enum Syscall {
         #[nr(Arch::X86_64, 43)]
         #[nr(Arch::Arm, 285)]

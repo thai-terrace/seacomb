@@ -15,9 +15,31 @@ fn native_constructor_adds_only_native() {
         }
     }
     assert!(matches!(
-        Filter::new_native(Action::Errno(4095)),
+        Filter::new_native(Action::Errno(4096)),
         Err(Error::InvalidErrno)
     ));
+}
+
+#[test]
+fn cloned_filters_can_be_customized_independently() {
+    let syscall = Syscall::Getpid;
+    let action = Action::Errno(13);
+    let mut condition = ArgCmp::eq(0, 1);
+    let mut filter = Filter::new_native(Action::Allow).unwrap();
+    filter.add_rule(action, syscall, vec![condition]).unwrap();
+    let original_program = filter.policy.to_cbpf().unwrap();
+
+    let mut cloned = filter.clone();
+    assert_eq!(cloned, filter);
+    assert_eq!(cloned.policy.to_cbpf().unwrap(), original_program);
+
+    condition.a = 2;
+    cloned.add_rule(action, syscall, vec![condition]).unwrap();
+    cloned.enable_thread_sync();
+
+    assert_ne!(cloned, filter);
+    assert_eq!(filter.policy.to_cbpf().unwrap(), original_program);
+    assert_ne!(cloned.policy.to_cbpf().unwrap(), original_program);
 }
 
 #[test]
@@ -46,13 +68,14 @@ fn action_payload_boundaries() {
     for action in [
         Action::Errno(0),
         Action::Errno(4094),
+        Action::Errno(4095),
         Action::Trace(u16::MAX),
         Action::Trap(u16::MAX),
     ] {
         let mut filter = Filter::new_native(Action::Allow).unwrap();
         filter.add_rule(action, Syscall::Getpid, vec![]).unwrap();
     }
-    for errno in [4095, 4096, u16::MAX] {
+    for errno in [4096, u16::MAX] {
         assert!(matches!(
             Filter::new(Action::Errno(errno)),
             Err(Error::InvalidErrno)
@@ -257,7 +280,7 @@ fn invalid_updates_preserve_existing_rules() {
         Err(Error::DuplicateArch)
     ));
     for (action, conds) in [
-        (Action::Errno(4095), vec![]),
+        (Action::Errno(4096), vec![]),
         (Action::Errno(8), vec![ArgCmp::eq(u32::MAX, 0)]),
         (Action::Errno(8), vec![ArgCmp::eq(0, 0), ArgCmp::eq(6, 0)]),
     ] {
@@ -282,7 +305,7 @@ fn invalid_bad_arch_preserves_previous_action() {
     let mut filter = Filter::new(Action::Allow).unwrap();
     filter.on_bad_arch(Action::KillProcess).unwrap();
     assert!(matches!(
-        filter.on_bad_arch(Action::Errno(4095)),
+        filter.on_bad_arch(Action::Errno(4096)),
         Err(Error::InvalidErrno)
     ));
     assert_eq!(Child::run(&filter, || 0), Child::Killed(libc::SIGSYS));
@@ -291,7 +314,7 @@ fn invalid_bad_arch_preserves_previous_action() {
 #[cfg(target_os = "linux")]
 #[test]
 fn errno_zero_and_maximum_are_enforced() {
-    for errno in [0, 4094] {
+    for errno in [0, 4094, 4095] {
         let mut filter = Filter::new_native(Action::Allow).unwrap();
         filter
             .add_rule(Action::Errno(errno), Syscall::Getpid, vec![])
@@ -929,11 +952,11 @@ fn bad_arch_kills() {
     assert_eq!(child, Child::Killed(libc::SIGSYS));
 }
 
-/// An errno the kernel has no room for is turned down.
+/// Errno payloads above Linux's maximum are rejected rather than clamped.
 #[test]
 fn errno_out_of_range() {
-    assert!(Filter::new(Action::Errno(Action::MAX_ERRNO as u16)).is_err());
-    assert!(Filter::new(Action::Errno(Action::MAX_ERRNO as u16 - 1)).is_ok());
+    assert!(Filter::new(Action::Errno(Action::MAX_ERRNO as u16 + 1)).is_err());
+    assert!(Filter::new(Action::Errno(Action::MAX_ERRNO as u16)).is_ok());
 }
 
 /// The same architecture twice is turned down.
@@ -978,7 +1001,6 @@ fn rule_checks_condition_indices() {
         action: Action::Allow,
         syscall: Syscall::Getpid,
         conds,
-        exact: false,
     };
     assert!(rule(vec![]).check().is_ok());
     assert!(rule((0..6).rev().map(|arg| ArgCmp::eq(arg, 0)).collect())
@@ -1010,12 +1032,13 @@ fn action_checks_return_validation_errors() {
         Action::Notify,
         Action::Errno(0),
         Action::Errno(4094),
+        Action::Errno(4095),
         Action::Trace(u16::MAX),
         Action::Trap(u16::MAX),
     ] {
         assert!(action.check().is_ok());
     }
-    for errno in [4095, 4096, u16::MAX] {
+    for errno in [4096, u16::MAX] {
         assert!(matches!(
             Action::Errno(errno).check(),
             Err(Error::InvalidErrno)
@@ -1029,11 +1052,10 @@ fn rule_checks_propagate_validation_errors() {
         action,
         syscall: Syscall::Getpid,
         conds,
-        exact: false,
     };
     assert!(rule(Action::Errno(1), vec![]).check().is_ok());
     assert!(matches!(
-        rule(Action::Errno(4095), vec![]).check(),
+        rule(Action::Errno(4096), vec![]).check(),
         Err(Error::InvalidErrno)
     ));
     assert!(Filter::new_native(Action::Allow)
