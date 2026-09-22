@@ -57,8 +57,13 @@ macro_rules! syscalls {
 }
 
 syscalls! {
-    /// Every syscall libseccomp knows on x86, x86_64, arm or aarch64 (`src/syscalls.csv`).
-    /// Extracted from <https://github.com/seccomp/libseccomp/blob/main/src/syscalls.csv>.
+    /// Linux syscall identifiers.
+    ///
+    /// Extracted from:
+    /// - [x86 table](https://github.com/torvalds/linux/blob/v6.17/arch/x86/entry/syscalls/syscall_32.tbl)
+    /// - [x86_64 table](https://github.com/torvalds/linux/blob/v6.17/arch/x86/entry/syscalls/syscall_64.tbl)
+    /// - [ARM table](https://github.com/torvalds/linux/blob/v6.17/arch/arm/tools/syscall.tbl)
+    /// - [AArch64 table](https://github.com/torvalds/linux/blob/v6.17/scripts/syscall.tbl)
     pub enum Syscall {
         #[nr(Arch::X86_64, 43)]
         #[nr(Arch::Arm, 285)]
