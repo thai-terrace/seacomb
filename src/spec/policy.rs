@@ -268,7 +268,10 @@ impl Rule {
 
 impl Policy {
     pub open spec fn is_active_arch(self, arch: Arch, ev: Event) -> bool {
-        self.archs@.contains(arch) && ev.arch == arch.token()
+        &&& self.archs@.contains(arch)
+        &&& ev.arch == arch.token()
+        // Make sure that X32 syscalls are not treated as unsupported X86_64 syscalls.
+        &&& arch == Arch::X86_64 ==> ev.nr & 0x40000000 == 0
     }
 
     /// Defines whether evaluating the policy on event `ev`

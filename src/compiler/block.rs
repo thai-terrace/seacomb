@@ -27,6 +27,7 @@ impl Arch {
     ///     ld  [arch]
     ///     jne #token -> end
     ///     ld  [nr]
+    ///     jset #0x40000000 -> end  (x86_64 only)
     /// ```
     fn emit_guard(self, b: &mut Builder, end: Label) -> (res: Result<(), CompileError>)
         requires 0 < end <= b.rev@.len(), b.wf()
@@ -34,15 +35,23 @@ impl Arch {
             Builder::extends(old(b).rev@, final(b).rev@),
             final(b).wf(),
             res is Ok ==> forall |data: &[u8]| Event::parse(data) is Some
-                && Event::of(data).arch == self.token() ==>
+                && self.matches_event(Event::of(data)) ==>
                 #[trigger] Builder::goes_to_all(final(b).rev@, data, final(b).rev@.len(),
                     old(b).rev@.len(), Event::of(data).nr as u32),
             res is Ok ==> forall |data: &[u8]| Event::parse(data) is Some
                 && Event::of(data).arch != self.token() ==>
                 #[trigger] Builder::goes_to_all(final(b).rev@, data, final(b).rev@.len(),
                     end as nat, Event::of(data).arch),
+            res is Ok ==> forall |data: &[u8]| Event::parse(data) is Some
+                && Event::of(data).arch == self.token() && !self.matches_event(Event::of(data)) ==>
+                #[trigger] Builder::goes_to_all(final(b).rev@, data, final(b).rev@.len(),
+                    end as nat, Event::of(data).nr as u32),
     {
         let ghost body = b.rev@;
+        if self == Arch::X86_64 {
+            b.emit_jump(JmpOp::Set, Src::K(0x4000_0000), true, end)?;
+        }
+        let ghost guarded_nr = b.rev@;
         b.emit(Instr::LdAbs(Policy::OFFSET_EVENT_NR));
         proof { Builder::lemma_ld(b.rev@, Policy::OFFSET_EVENT_NR); }
         let ghost loaded_nr = b.rev@;
@@ -54,20 +63,29 @@ impl Arch {
             assert forall |data: &[u8], a: u32|
                 #![trigger Builder::goes_to(b.rev@, data, b.rev@.len(), a, body.len(), Event::of(data).nr as u32)]
                 #![trigger Builder::goes_to(b.rev@, data, b.rev@.len(), a, end as nat, Event::of(data).arch)]
+                #![trigger Builder::goes_to(b.rev@, data, b.rev@.len(), a, end as nat, Event::of(data).nr as u32)]
                 Event::parse(data) is Some implies
-                if Event::of(data).arch == self.token() {
+                if self.matches_event(Event::of(data)) {
                     Builder::goes_to(b.rev@, data, b.rev@.len(), a,
                         body.len(), Event::of(data).nr as u32)
+                } else if Event::of(data).arch == self.token() {
+                    Builder::goes_to(b.rev@, data, b.rev@.len(), a,
+                        end as nat, Event::of(data).nr as u32)
                 } else {
                     Builder::goes_to(b.rev@, data, b.rev@.len(), a,
                         end as nat, Event::of(data).arch)
                 } by {
                 let ev = Event::of(data);
                 let nr = ev.nr as u32;
-                let to = if ev.arch == self.token() { body.len() } else { end as nat };
+                let to = if self.matches_event(ev) { body.len() } else { end as nat };
                 Event::lemma_image(data);
                 if ev.arch == self.token() {
-                    assert(Builder::goes_to(loaded_nr, data, loaded_nr.len(), ev.arch, body.len(), nr));
+                    let signed_nr = ev.nr;
+                    assert((signed_nr as u32 & 0x4000_0000 == 0)
+                        <==> (signed_nr & 0x4000_0000 == 0)) by (bit_vector);
+                    assert(Builder::goes_to(guarded_nr, data, guarded_nr.len(), nr, to, nr));
+                    Builder::lemma_then(guarded_nr, loaded_nr, data, loaded_nr.len(), ev.arch,
+                        guarded_nr.len(), nr, to, nr);
                     Builder::lemma_then(loaded_nr, guarded_arch, data, guarded_arch.len(), ev.arch,
                         loaded_nr.len(), ev.arch, to, nr);
                     Builder::lemma_then(guarded_arch, b.rev@, data, b.rev@.len(), a,
@@ -99,7 +117,7 @@ impl Policy {
             res is Ok ==> forall |data: &[u8], tail: Action| Event::parse(data) is Some
                 && #[trigger] Builder::returns_all(old(b).rev@, data, old(b).rev@.len(), tail.to_ret()) ==>
                 Builder::returns_all(final(b).rev@, data, final(b).rev@.len(),
-                    if Event::of(data).arch == arch.token() {
+                    if arch.matches_event(Event::of(data)) {
                         self.dispatch(arch, Event::of(data), 7, self.rules@.len() as int).to_ret()
                     } else { tail.to_ret() }),
     {
@@ -112,20 +130,21 @@ impl Policy {
             assert forall |data: &[u8], tail: Action| Event::parse(data) is Some
                 && #[trigger] Builder::returns_all(prev, data, prev.len(), tail.to_ret()) implies
                 Builder::returns_all(b.rev@, data, b.rev@.len(),
-                    if Event::of(data).arch == arch.token() {
+                    if arch.matches_event(Event::of(data)) {
                         self.dispatch(arch, Event::of(data), 7, self.rules@.len() as int).to_ret()
                     } else { tail.to_ret() }) by {
                 let ev = Event::of(data);
-                let want = if ev.arch == arch.token() {
+                let want = if arch.matches_event(ev) {
                     self.dispatch(arch, ev, 7, self.rules@.len() as int).to_ret()
                 } else { tail.to_ret() };
                 assert forall |a: u32| #[trigger] Builder::returns(b.rev@, data, b.rev@.len(), a, want) by {
-                    if ev.arch == arch.token() {
+                    if arch.matches_event(ev) {
                         assert(Builder::goes_to_all(b.rev@, data, b.rev@.len(), body.len(), ev.nr as u32));
                         Builder::lemma_then(body, b.rev@, data, b.rev@.len(), a, body.len(), ev.nr as u32, 0, want);
                     } else {
-                        assert(Builder::goes_to_all(b.rev@, data, b.rev@.len(), prev.len(), ev.arch));
-                        Builder::lemma_then(prev, b.rev@, data, b.rev@.len(), a, prev.len(), ev.arch, 0, want);
+                        let acc = if ev.arch == arch.token() { ev.nr as u32 } else { ev.arch };
+                        assert(Builder::goes_to_all(b.rev@, data, b.rev@.len(), prev.len(), acc));
+                        Builder::lemma_then(prev, b.rev@, data, b.rev@.len(), a, prev.len(), acc, 0, want);
                     }
                 }
             }

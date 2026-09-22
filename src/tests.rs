@@ -591,9 +591,9 @@ fn ordering_is_unsigned() {
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64", target_pointer_width = "64"))]
 #[test]
-fn x86_64_unmatched_syscall_numbers_take_default() {
+fn x86_64_unmatched_syscall_numbers_select_abi_default() {
     let mut filter = Filter::new_native(Action::Errno(libc::EACCES as u16)).unwrap();
-    filter.on_bad_arch(Action::KillProcess).unwrap();
+    filter.on_bad_arch(Action::Errno(libc::EPERM as u16)).unwrap();
     filter.add_rule(Action::Allow, Syscall::Exit, vec![]).unwrap();
     filter.add_rule(Action::Allow, Syscall::ExitGroup, vec![]).unwrap();
     let child = Child::run(&filter, || {
@@ -618,7 +618,8 @@ fn x86_64_unmatched_syscall_numbers_take_default() {
                     0 as libc::c_ulong,
                 )
             };
-            if ret != -1 || Child::errno() != libc::EACCES {
+            let expected = if *nr & 0x4000_0000 != 0 { libc::EPERM } else { libc::EACCES };
+            if ret != -1 || Child::errno() != expected {
                 return i as i32 + 1;
             }
         }

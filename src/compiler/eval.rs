@@ -5,6 +5,14 @@ use crate::spec::{policy::*, syscall::*};
 
 verus! {
 
+impl Arch {
+    /// Whether the architecture guard accepts the event's token and syscall ABI.
+    pub(crate) open spec fn matches_event(self, ev: Event) -> bool {
+        &&& ev.arch == self.token()
+        &&& self == Arch::X86_64 ==> ev.nr & 0x4000_0000 == 0
+    }
+}
+
 impl Syscall {
     /// No syscall a multiplexer reaches answers to the multiplexer's own x86 number.
     pub(super) broadcast proof fn lemma_mux_nr(&self)
@@ -93,7 +101,7 @@ impl Policy {
     {
         if i >= self.archs@.len() {
             self.act_bad_arch
-        } else if ev.arch == self.archs@[i].token() {
+        } else if self.archs@[i].matches_event(ev) {
             self.dispatch(self.archs@[i], ev, 7, self.rules@.len() as int)
         } else {
             self.blocks(ev, i + 1)
@@ -133,7 +141,7 @@ impl Policy {
         requires
             self.wf(),
             0 <= i <= self.archs@.len(),
-            forall |j: int| 0 <= j < i ==> ev.arch != (#[trigger] self.archs@[j]).token(),
+            forall |j: int| 0 <= j < i ==> !(#[trigger] self.archs@[j]).matches_event(ev),
         ensures self.eval(ev, self.blocks(ev, i))
         decreases self.archs@.len() - i
     {
@@ -141,11 +149,11 @@ impl Policy {
             assert forall |a: Arch| !self.is_active_arch(a, ev) by {
                 if self.is_active_arch(a, ev) {
                     let j = choose |j: int| 0 <= j < self.archs@.len() && self.archs@[j] == a;
-                    assert(ev.arch == self.archs@[j].token());
+                    assert(self.archs@[j].matches_event(ev));
                     assert(false);
                 }
             }
-        } else if ev.arch == self.archs@[i].token() {
+        } else if self.archs@[i].matches_event(ev) {
             let arch = self.archs@[i];
             let act = self.dispatch(arch, ev, 7, self.rules@.len() as int);
             assert(self.archs@.contains(arch));
