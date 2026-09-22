@@ -108,28 +108,28 @@ impl ArgCmp {
             xl == Builder::word(data, (Policy::OFFSET_EVENT_ARGS + 8 * self.arg) as u32),
         ensures
             self.op is Eq ==> (self.holds(arch, Event::of(data).args)
-                <==> xl == self.datum_a as u32),
+                <==> xl == self.a as u32),
             self.op is Ne ==> (self.holds(arch, Event::of(data).args)
-                <==> xl != self.datum_a as u32),
+                <==> xl != self.a as u32),
             self.op is Lt ==> (self.holds(arch, Event::of(data).args)
-                <==> xl < self.datum_a as u32),
+                <==> xl < self.a as u32),
             self.op is Le ==> (self.holds(arch, Event::of(data).args)
-                <==> xl <= self.datum_a as u32),
+                <==> xl <= self.a as u32),
             self.op is Gt ==> (self.holds(arch, Event::of(data).args)
-                <==> xl > self.datum_a as u32),
+                <==> xl > self.a as u32),
             self.op is Ge ==> (self.holds(arch, Event::of(data).args)
-                <==> xl >= self.datum_a as u32),
+                <==> xl >= self.a as u32),
             self.op is MaskedEq ==> (self.holds(arch, Event::of(data).args)
-                <==> xl & (self.datum_a as u32) == (self.datum_b as u32) & (self.datum_a as u32)),
+                <==> xl & (self.a as u32) == (self.b as u32) & (self.a as u32)),
     {
         let x = Event::of(data).args[self.arg as int];
         Event::lemma_image(data);
         assert(Builder::word(data, (Policy::OFFSET_EVENT_ARGS + 8 * self.arg) as u32)
             == (x & 0xFFFF_FFFF) as u32);
-        ArgCmp::lemma_words(x, self.datum_a);
-        ArgCmp::lemma_words(self.datum_a, x);
-        ArgCmp::lemma_words(self.datum_b, self.datum_a);
-        Self::lemma_masked_words(xl, self.datum_a as u32, self.datum_b as u32);
+        ArgCmp::lemma_words(x, self.a);
+        ArgCmp::lemma_words(self.a, x);
+        ArgCmp::lemma_words(self.b, self.a);
+        Self::lemma_masked_words(xl, self.a as u32, self.b as u32);
     }
 
     /// What this test comes to on the two words the filter loads for a 64-bit argument.
@@ -142,25 +142,25 @@ impl ArgCmp {
             xh == Builder::word(data, (Policy::OFFSET_EVENT_ARGS + 8 * self.arg + 4) as u32),
         ensures
             self.op is Eq ==> (self.holds(arch, Event::of(data).args)
-                <==> xh == (self.datum_a >> 32) as u32 && xl == self.datum_a as u32),
+                <==> xh == (self.a >> 32) as u32 && xl == self.a as u32),
             self.op is Ne ==> (self.holds(arch, Event::of(data).args)
-                <==> !(xh == (self.datum_a >> 32) as u32 && xl == self.datum_a as u32)),
+                <==> !(xh == (self.a >> 32) as u32 && xl == self.a as u32)),
             self.op is Lt ==> (self.holds(arch, Event::of(data).args)
-                <==> xh < (self.datum_a >> 32) as u32
-                    || (xh == (self.datum_a >> 32) as u32 && xl < self.datum_a as u32)),
+                <==> xh < (self.a >> 32) as u32
+                    || (xh == (self.a >> 32) as u32 && xl < self.a as u32)),
             self.op is Le ==> (self.holds(arch, Event::of(data).args)
-                <==> xh < (self.datum_a >> 32) as u32
-                    || (xh == (self.datum_a >> 32) as u32 && xl <= self.datum_a as u32)),
+                <==> xh < (self.a >> 32) as u32
+                    || (xh == (self.a >> 32) as u32 && xl <= self.a as u32)),
             self.op is Gt ==> (self.holds(arch, Event::of(data).args)
-                <==> xh > (self.datum_a >> 32) as u32
-                    || (xh == (self.datum_a >> 32) as u32 && xl > self.datum_a as u32)),
+                <==> xh > (self.a >> 32) as u32
+                    || (xh == (self.a >> 32) as u32 && xl > self.a as u32)),
             self.op is Ge ==> (self.holds(arch, Event::of(data).args)
-                <==> xh > (self.datum_a >> 32) as u32
-                    || (xh == (self.datum_a >> 32) as u32 && xl >= self.datum_a as u32)),
+                <==> xh > (self.a >> 32) as u32
+                    || (xh == (self.a >> 32) as u32 && xl >= self.a as u32)),
             self.op is MaskedEq ==> (self.holds(arch, Event::of(data).args)
-                <==> xh & (self.datum_a >> 32) as u32
-                        == (self.datum_b >> 32) as u32 & (self.datum_a >> 32) as u32
-                    && xl & (self.datum_a as u32) == (self.datum_b as u32) & (self.datum_a as u32)),
+                <==> xh & (self.a >> 32) as u32
+                        == (self.b >> 32) as u32 & (self.a >> 32) as u32
+                    && xl & (self.a as u32) == (self.b as u32) & (self.a as u32)),
     {
         let x = Event::of(data).args[self.arg as int];
         Event::lemma_image(data);
@@ -168,10 +168,10 @@ impl ArgCmp {
             == (x & 0xFFFF_FFFF) as u32);
         assert(Builder::word(data, (Policy::OFFSET_EVENT_ARGS + 8 * self.arg + 4) as u32)
             == (x >> 32) as u32);
-        ArgCmp::lemma_words(x, self.datum_a);
-        ArgCmp::lemma_words(self.datum_a, x);
-        ArgCmp::lemma_words(self.datum_b, self.datum_a);
-        ArgCmp::lemma_words(x & self.datum_a, self.datum_b & self.datum_a);
+        ArgCmp::lemma_words(x, self.a);
+        ArgCmp::lemma_words(self.a, x);
+        ArgCmp::lemma_words(self.b, self.a);
+        ArgCmp::lemma_words(x & self.a, self.b & self.a);
     }
 
     /// The load at the front of `ext` hands the word it reads to the code behind it.
@@ -263,13 +263,13 @@ impl ArgCmp {
             hi == lo + 4,
             s2 == s1.push(Instr::LdAbs(lo)),
             Builder::extends(s2, s3),
-            forall |data: &[u8], a: u32| a != self.datum_a as u32 ==>
+            forall |data: &[u8], a: u32| a != self.a as u32 ==>
                 #[trigger] Builder::goes_to(s1, data, s1.len(), a, fail, a),
-            forall |data: &[u8], a: u32| a == self.datum_a as u32 ==>
+            forall |data: &[u8], a: u32| a == self.a as u32 ==>
                 #[trigger] Builder::goes_to(s1, data, s1.len(), a, pass, a),
-            forall |data: &[u8], a: u32| a != (self.datum_a >> 32) as u32 ==>
+            forall |data: &[u8], a: u32| a != (self.a >> 32) as u32 ==>
                 #[trigger] Builder::goes_to(s3, data, s3.len(), a, fail, a),
-            forall |data: &[u8], a: u32| a == (self.datum_a >> 32) as u32 ==>
+            forall |data: &[u8], a: u32| a == (self.a >> 32) as u32 ==>
                 #[trigger] Builder::goes_to(s3, data, s3.len(), a, s2.len(), a),
         ensures
             forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE
@@ -281,7 +281,7 @@ impl ArgCmp {
                 #[trigger] Builder::lands(s3, data, s3.len(),
                     Builder::word(data, hi), fail),
     {
-        let a_hi = (self.datum_a >> 32) as u32;
+        let a_hi = (self.a >> 32) as u32;
         assert forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE
             && self.holds(arch, Event::of(data).args) implies
             #[trigger] Builder::lands(s3, data, s3.len(),
@@ -323,13 +323,13 @@ impl ArgCmp {
             hi == lo + 4,
             s2 == s1.push(Instr::LdAbs(lo)),
             Builder::extends(s2, s3),
-            forall |data: &[u8], a: u32| a == self.datum_a as u32 ==>
+            forall |data: &[u8], a: u32| a == self.a as u32 ==>
                 #[trigger] Builder::goes_to(s1, data, s1.len(), a, fail, a),
-            forall |data: &[u8], a: u32| a != self.datum_a as u32 ==>
+            forall |data: &[u8], a: u32| a != self.a as u32 ==>
                 #[trigger] Builder::goes_to(s1, data, s1.len(), a, pass, a),
-            forall |data: &[u8], a: u32| a != (self.datum_a >> 32) as u32 ==>
+            forall |data: &[u8], a: u32| a != (self.a >> 32) as u32 ==>
                 #[trigger] Builder::goes_to(s3, data, s3.len(), a, pass, a),
-            forall |data: &[u8], a: u32| a == (self.datum_a >> 32) as u32 ==>
+            forall |data: &[u8], a: u32| a == (self.a >> 32) as u32 ==>
                 #[trigger] Builder::goes_to(s3, data, s3.len(), a, s2.len(), a),
         ensures
             forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE
@@ -341,7 +341,7 @@ impl ArgCmp {
                 #[trigger] Builder::lands(s3, data, s3.len(),
                     Builder::word(data, hi), fail),
     {
-        let a_hi = (self.datum_a >> 32) as u32;
+        let a_hi = (self.a >> 32) as u32;
         assert forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE
             && self.holds(arch, Event::of(data).args) implies
             #[trigger] Builder::lands(s3, data, s3.len(),
@@ -384,17 +384,17 @@ impl ArgCmp {
             s2 == s1.push(Instr::LdAbs(lo)),
             Builder::extends(s2, s3),
             Builder::extends(s3, s4),
-            forall |data: &[u8], a: u32| a >= self.datum_a as u32 ==>
+            forall |data: &[u8], a: u32| a >= self.a as u32 ==>
                 #[trigger] Builder::goes_to(s1, data, s1.len(), a, fail, a),
-            forall |data: &[u8], a: u32| a < self.datum_a as u32 ==>
+            forall |data: &[u8], a: u32| a < self.a as u32 ==>
                 #[trigger] Builder::goes_to(s1, data, s1.len(), a, pass, a),
-            forall |data: &[u8], a: u32| a != (self.datum_a >> 32) as u32 ==>
+            forall |data: &[u8], a: u32| a != (self.a >> 32) as u32 ==>
                 #[trigger] Builder::goes_to(s3, data, s3.len(), a, pass, a),
-            forall |data: &[u8], a: u32| a == (self.datum_a >> 32) as u32 ==>
+            forall |data: &[u8], a: u32| a == (self.a >> 32) as u32 ==>
                 #[trigger] Builder::goes_to(s3, data, s3.len(), a, s2.len(), a),
-            forall |data: &[u8], a: u32| a > (self.datum_a >> 32) as u32 ==>
+            forall |data: &[u8], a: u32| a > (self.a >> 32) as u32 ==>
                 #[trigger] Builder::goes_to(s4, data, s4.len(), a, fail, a),
-            forall |data: &[u8], a: u32| a <= (self.datum_a >> 32) as u32 ==>
+            forall |data: &[u8], a: u32| a <= (self.a >> 32) as u32 ==>
                 #[trigger] Builder::goes_to(s4, data, s4.len(), a, s3.len(), a),
         ensures
             forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE
@@ -406,7 +406,7 @@ impl ArgCmp {
                 #[trigger] Builder::lands(s4, data, s4.len(),
                     Builder::word(data, hi), fail),
     {
-        let a_hi = (self.datum_a >> 32) as u32;
+        let a_hi = (self.a >> 32) as u32;
         assert forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE
             && self.holds(arch, Event::of(data).args) implies
             #[trigger] Builder::lands(s4, data, s4.len(),
@@ -458,17 +458,17 @@ impl ArgCmp {
             s2 == s1.push(Instr::LdAbs(lo)),
             Builder::extends(s2, s3),
             Builder::extends(s3, s4),
-            forall |data: &[u8], a: u32| a > self.datum_a as u32 ==>
+            forall |data: &[u8], a: u32| a > self.a as u32 ==>
                 #[trigger] Builder::goes_to(s1, data, s1.len(), a, fail, a),
-            forall |data: &[u8], a: u32| a <= self.datum_a as u32 ==>
+            forall |data: &[u8], a: u32| a <= self.a as u32 ==>
                 #[trigger] Builder::goes_to(s1, data, s1.len(), a, pass, a),
-            forall |data: &[u8], a: u32| a != (self.datum_a >> 32) as u32 ==>
+            forall |data: &[u8], a: u32| a != (self.a >> 32) as u32 ==>
                 #[trigger] Builder::goes_to(s3, data, s3.len(), a, pass, a),
-            forall |data: &[u8], a: u32| a == (self.datum_a >> 32) as u32 ==>
+            forall |data: &[u8], a: u32| a == (self.a >> 32) as u32 ==>
                 #[trigger] Builder::goes_to(s3, data, s3.len(), a, s2.len(), a),
-            forall |data: &[u8], a: u32| a > (self.datum_a >> 32) as u32 ==>
+            forall |data: &[u8], a: u32| a > (self.a >> 32) as u32 ==>
                 #[trigger] Builder::goes_to(s4, data, s4.len(), a, fail, a),
-            forall |data: &[u8], a: u32| a <= (self.datum_a >> 32) as u32 ==>
+            forall |data: &[u8], a: u32| a <= (self.a >> 32) as u32 ==>
                 #[trigger] Builder::goes_to(s4, data, s4.len(), a, s3.len(), a),
         ensures
             forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE
@@ -480,7 +480,7 @@ impl ArgCmp {
                 #[trigger] Builder::lands(s4, data, s4.len(),
                     Builder::word(data, hi), fail),
     {
-        let a_hi = (self.datum_a >> 32) as u32;
+        let a_hi = (self.a >> 32) as u32;
         assert forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE
             && self.holds(arch, Event::of(data).args) implies
             #[trigger] Builder::lands(s4, data, s4.len(),
@@ -532,17 +532,17 @@ impl ArgCmp {
             s2 == s1.push(Instr::LdAbs(lo)),
             Builder::extends(s2, s3),
             Builder::extends(s3, s4),
-            forall |data: &[u8], a: u32| a <= self.datum_a as u32 ==>
+            forall |data: &[u8], a: u32| a <= self.a as u32 ==>
                 #[trigger] Builder::goes_to(s1, data, s1.len(), a, fail, a),
-            forall |data: &[u8], a: u32| a > self.datum_a as u32 ==>
+            forall |data: &[u8], a: u32| a > self.a as u32 ==>
                 #[trigger] Builder::goes_to(s1, data, s1.len(), a, pass, a),
-            forall |data: &[u8], a: u32| a != (self.datum_a >> 32) as u32 ==>
+            forall |data: &[u8], a: u32| a != (self.a >> 32) as u32 ==>
                 #[trigger] Builder::goes_to(s3, data, s3.len(), a, fail, a),
-            forall |data: &[u8], a: u32| a == (self.datum_a >> 32) as u32 ==>
+            forall |data: &[u8], a: u32| a == (self.a >> 32) as u32 ==>
                 #[trigger] Builder::goes_to(s3, data, s3.len(), a, s2.len(), a),
-            forall |data: &[u8], a: u32| a > (self.datum_a >> 32) as u32 ==>
+            forall |data: &[u8], a: u32| a > (self.a >> 32) as u32 ==>
                 #[trigger] Builder::goes_to(s4, data, s4.len(), a, pass, a),
-            forall |data: &[u8], a: u32| a <= (self.datum_a >> 32) as u32 ==>
+            forall |data: &[u8], a: u32| a <= (self.a >> 32) as u32 ==>
                 #[trigger] Builder::goes_to(s4, data, s4.len(), a, s3.len(), a),
         ensures
             forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE
@@ -554,7 +554,7 @@ impl ArgCmp {
                 #[trigger] Builder::lands(s4, data, s4.len(),
                     Builder::word(data, hi), fail),
     {
-        let a_hi = (self.datum_a >> 32) as u32;
+        let a_hi = (self.a >> 32) as u32;
         assert forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE
             && self.holds(arch, Event::of(data).args) implies
             #[trigger] Builder::lands(s4, data, s4.len(),
@@ -606,17 +606,17 @@ impl ArgCmp {
             s2 == s1.push(Instr::LdAbs(lo)),
             Builder::extends(s2, s3),
             Builder::extends(s3, s4),
-            forall |data: &[u8], a: u32| a < self.datum_a as u32 ==>
+            forall |data: &[u8], a: u32| a < self.a as u32 ==>
                 #[trigger] Builder::goes_to(s1, data, s1.len(), a, fail, a),
-            forall |data: &[u8], a: u32| a >= self.datum_a as u32 ==>
+            forall |data: &[u8], a: u32| a >= self.a as u32 ==>
                 #[trigger] Builder::goes_to(s1, data, s1.len(), a, pass, a),
-            forall |data: &[u8], a: u32| a != (self.datum_a >> 32) as u32 ==>
+            forall |data: &[u8], a: u32| a != (self.a >> 32) as u32 ==>
                 #[trigger] Builder::goes_to(s3, data, s3.len(), a, fail, a),
-            forall |data: &[u8], a: u32| a == (self.datum_a >> 32) as u32 ==>
+            forall |data: &[u8], a: u32| a == (self.a >> 32) as u32 ==>
                 #[trigger] Builder::goes_to(s3, data, s3.len(), a, s2.len(), a),
-            forall |data: &[u8], a: u32| a > (self.datum_a >> 32) as u32 ==>
+            forall |data: &[u8], a: u32| a > (self.a >> 32) as u32 ==>
                 #[trigger] Builder::goes_to(s4, data, s4.len(), a, pass, a),
-            forall |data: &[u8], a: u32| a <= (self.datum_a >> 32) as u32 ==>
+            forall |data: &[u8], a: u32| a <= (self.a >> 32) as u32 ==>
                 #[trigger] Builder::goes_to(s4, data, s4.len(), a, s3.len(), a),
         ensures
             forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE
@@ -628,7 +628,7 @@ impl ArgCmp {
                 #[trigger] Builder::lands(s4, data, s4.len(),
                     Builder::word(data, hi), fail),
     {
-        let a_hi = (self.datum_a >> 32) as u32;
+        let a_hi = (self.a >> 32) as u32;
         assert forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE
             && self.holds(arch, Event::of(data).args) implies
             #[trigger] Builder::lands(s4, data, s4.len(),
@@ -678,21 +678,21 @@ impl ArgCmp {
             arch.mask() == u64::MAX,
             lo == (Policy::OFFSET_EVENT_ARGS + 8 * self.arg) as u32,
             hi == lo + 4,
-            s2 == s1.push(Instr::Alu(AluOp::And, Src::K(self.datum_a as u32))),
+            s2 == s1.push(Instr::Alu(AluOp::And, Src::K(self.a as u32))),
             s3 == s2.push(Instr::LdAbs(lo)),
-            s5 == s4.push(Instr::Alu(AluOp::And, Src::K((self.datum_a >> 32) as u32))),
+            s5 == s4.push(Instr::Alu(AluOp::And, Src::K((self.a >> 32) as u32))),
             Builder::extends(s3, s4),
             forall |data: &[u8], a: u32|
-                a != (self.datum_b as u32) & (self.datum_a as u32) ==>
+                a != (self.b as u32) & (self.a as u32) ==>
                 #[trigger] Builder::goes_to(s1, data, s1.len(), a, fail, a),
             forall |data: &[u8], a: u32|
-                a == (self.datum_b as u32) & (self.datum_a as u32) ==>
+                a == (self.b as u32) & (self.a as u32) ==>
                 #[trigger] Builder::goes_to(s1, data, s1.len(), a, pass, a),
             forall |data: &[u8], a: u32|
-                a != ((self.datum_b >> 32) as u32) & ((self.datum_a >> 32) as u32) ==>
+                a != ((self.b >> 32) as u32) & ((self.a >> 32) as u32) ==>
                 #[trigger] Builder::goes_to(s4, data, s4.len(), a, fail, a),
             forall |data: &[u8], a: u32|
-                a == ((self.datum_b >> 32) as u32) & ((self.datum_a >> 32) as u32) ==>
+                a == ((self.b >> 32) as u32) & ((self.a >> 32) as u32) ==>
                 #[trigger] Builder::goes_to(s4, data, s4.len(), a, s3.len(), a),
         ensures
             forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE
@@ -704,10 +704,10 @@ impl ArgCmp {
                 #[trigger] Builder::lands(s5, data, s5.len(),
                     Builder::word(data, hi), fail),
     {
-        let a_lo = self.datum_a as u32;
-        let a_hi = (self.datum_a >> 32) as u32;
-        let b_lo = self.datum_b as u32;
-        let b_hi = (self.datum_b >> 32) as u32;
+        let a_lo = self.a as u32;
+        let a_hi = (self.a >> 32) as u32;
+        let b_lo = self.b as u32;
+        let b_hi = (self.b >> 32) as u32;
         assert forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE
             && self.holds(arch, Event::of(data).args) implies
             #[trigger] Builder::lands(s5, data, s5.len(),
@@ -776,10 +776,10 @@ impl ArgCmp {
         let pass = b.label();
         let lo = Policy::OFFSET_EVENT_ARGS + 8 * self.arg;
         let hi = lo + 4;
-        let a_lo = self.datum_a as u32;
-        let a_hi = (self.datum_a >> 32) as u32;
-        let b_lo = self.datum_b as u32;
-        let b_hi = (self.datum_b >> 32) as u32;
+        let a_lo = self.a as u32;
+        let a_hi = (self.a >> 32) as u32;
+        let b_lo = self.b as u32;
+        let b_hi = (self.b >> 32) as u32;
 
         if !arch.is_64bit() {
             match self.op {

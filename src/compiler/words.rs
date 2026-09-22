@@ -79,7 +79,7 @@ impl Event {
     /// The x32 bit and syscall numbers as unsigned filter comparisons see them.
     pub(super) proof fn lemma_nr(self)
         ensures
-            self.x32_bit() <==> self.nr as u32 >= 0x4000_0000,
+            self.is_x32() <==> self.nr as u32 >= 0x4000_0000,
             forall |nr: i32| #[trigger] (nr as u32) == self.nr as u32 ==> nr == self.nr,
     {
         let m = self.nr;

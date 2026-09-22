@@ -28,9 +28,9 @@ pub enum Compare { Ne, Lt, Le, Eq, Ge, Gt, MaskedEq }
 pub struct ArgCmp {
     pub arg: u32,
     pub op: Compare,
-    pub datum_a: u64,
-    /// For MaskedEq only: `datum_a` is the mask, `datum_b` the value.
-    pub datum_b: u64,
+    pub a: u64,
+    /// For MaskedEq only: `a` is the mask, `b` the value.
+    pub b: u64,
 }
 
 /// One `seccomp_rule_add[_exact][_array]` call.
@@ -131,9 +131,20 @@ pub enum SyscallMatch {
     None,
 }
 
+impl Arch {
+    /// Mask for the syscall number and arguments, depending on the architecture word size.
+    pub open spec fn mask(self) -> u64 {
+        if self == Arch::X86_64 || self == Arch::Aarch64 {
+            u64::MAX
+        } else {
+            0xFFFF_FFFF
+        }
+    }
+}
+
 impl Event {
     /// `nr >= X32_SYSCALL_BIT` (`src/arch-x32.h`) as the BPF's unsigned comparison sees it.
-    pub open spec fn x32_bit(self) -> bool { self.nr < 0 || self.nr >= 0x4000_0000 }
+    pub open spec fn is_x32(self) -> bool { self.nr < 0 || self.nr >= 0x4000_0000 }
 
     /// `arch_def.token_bpf`: what the kernel reports in `seccomp_data.arch` (`linux/audit.h`).
     pub open spec fn matches_arch(self, arch: Arch) -> bool {
@@ -152,9 +163,9 @@ impl Event {
         } else if arch == Arch::X86 && {
             // Matching against multiplexed `socketcall` or `ipc` on x86.
             ||| Syscall::Socketcall.nr(arch) == Some(self.nr)
-                && name.to_socketcall_arg() == Some(self.args[0] & 0xFFFF_FFFF)
+                && name.to_socketcall_arg() == Some(self.args[0] & arch.mask())
             ||| Syscall::Ipc.nr(arch) == Some(self.nr)
-                && name.to_ipc_arg() == Some(self.args[0] & 0xFFFF_FFFF)
+                && name.to_ipc_arg() == Some(self.args[0] & arch.mask())
         } {
             SyscallMatch::Mux
         } else {
@@ -163,7 +174,6 @@ impl Event {
     }
 
     /// Parses a (little-endian) `seccomp_data` from the kernel into an `Event`.
-    /// TODO: Use Vest.
     pub open spec fn parse(data: &[u8]) -> Option<Event> {
         if data@.len() != 64 {
             None
@@ -226,23 +236,12 @@ impl Action {
     }
 }
 
-impl Arch {
-    /// Mask for the syscall number and arguments, depending on the architecture word size.
-    pub open spec fn mask(self) -> u64 {
-        if self == Arch::X86_64 || self == Arch::Aarch64 {
-            u64::MAX
-        } else {
-            0xFFFF_FFFF
-        }
-    }
-}
-
 impl ArgCmp {
     /// `_db_rule_gen_64` / `_db_rule_gen_32`.
     pub open spec fn holds(self, arch: Arch, args: Seq<u64>) -> bool {
         let x = args[self.arg as int] & arch.mask();
-        let a = self.datum_a & arch.mask();
-        let b = self.datum_b & arch.mask();
+        let a = self.a & arch.mask();
+        let b = self.b & arch.mask();
         match self.op {
             Compare::Ne => x != a,
             Compare::Lt => x < a,
@@ -273,7 +272,7 @@ impl Policy {
     pub open spec fn is_active_arch(self, arch: Arch, ev: Event) -> bool {
         &&& self.archs@.contains(arch)
         &&& ev.matches_arch(arch)
-        &&& arch == Arch::X32 ==> ev.x32_bit()
+        &&& arch == Arch::X32 ==> ev.is_x32()
         // To avoid an ambiguity where having skip rules in both x86_64 and x32
         // would potentially allow eval to accept two different actions.
         &&& Some(ev.nr) == Syscall::Skip.nr(arch) && arch == Arch::X86_64 ==> !self.archs@.contains(Arch::X32)

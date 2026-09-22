@@ -39,7 +39,7 @@ impl Syscall {
 impl Arch {
     /// Whether the architecture's syscall-number guard lets `ev` through.
     pub(super) open spec fn admits(self, ev: Event) -> bool {
-        self == Arch::X32 ==> ev.x32_bit()
+        self == Arch::X32 ==> ev.is_x32()
     }
 }
 
@@ -100,7 +100,7 @@ impl Rule {
 
     /// A matching x32 rule passes the architecture's syscall-number guard.
     pub(super) proof fn lemma_x32(self, ev: Event)
-        ensures self.eval(Arch::X32, ev) ==> ev.x32_bit()
+        ensures self.eval(Arch::X32, ev) ==> ev.is_x32()
     {
         self.syscall.lemma_x32_nr();
     }

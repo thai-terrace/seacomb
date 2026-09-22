@@ -48,52 +48,38 @@ impl Arch {
 
 impl ArgCmp {
     /// Tests whether the argument at index `arg` equals `val`.
-    pub fn eq(arg: u32, val: u64) -> (res: Self)
-        ensures res == (ArgCmp { arg, op: Compare::Eq, datum_a: val, datum_b: 0 })
-    {
-        ArgCmp { arg, op: Compare::Eq, datum_a: val, datum_b: 0 }
+    pub fn eq(arg: u32, val: u64) -> Self {
+        ArgCmp { arg, op: Compare::Eq, a: val, b: 0 }
     }
 
     /// Tests whether the argument at index `arg` does not equal `val`.
-    pub fn ne(arg: u32, val: u64) -> (res: Self)
-        ensures res == (ArgCmp { arg, op: Compare::Ne, datum_a: val, datum_b: 0 })
-    {
-        ArgCmp { arg, op: Compare::Ne, datum_a: val, datum_b: 0 }
+    pub fn ne(arg: u32, val: u64) -> Self {
+        ArgCmp { arg, op: Compare::Ne, a: val, b: 0 }
     }
 
     /// Tests whether the argument at index `arg` is less than `val`.
-    pub fn lt(arg: u32, val: u64) -> (res: Self)
-        ensures res == (ArgCmp { arg, op: Compare::Lt, datum_a: val, datum_b: 0 })
-    {
-        ArgCmp { arg, op: Compare::Lt, datum_a: val, datum_b: 0 }
+    pub fn lt(arg: u32, val: u64) -> Self {
+        ArgCmp { arg, op: Compare::Lt, a: val, b: 0 }
     }
 
     /// Tests whether the argument at index `arg` is less than or equal to `val`.
-    pub fn le(arg: u32, val: u64) -> (res: Self)
-        ensures res == (ArgCmp { arg, op: Compare::Le, datum_a: val, datum_b: 0 })
-    {
-        ArgCmp { arg, op: Compare::Le, datum_a: val, datum_b: 0 }
+    pub fn le(arg: u32, val: u64) -> Self {
+        ArgCmp { arg, op: Compare::Le, a: val, b: 0 }
     }
 
     /// Tests whether the argument at index `arg` is greater than `val`.
-    pub fn gt(arg: u32, val: u64) -> (res: Self)
-        ensures res == (ArgCmp { arg, op: Compare::Gt, datum_a: val, datum_b: 0 })
-    {
-        ArgCmp { arg, op: Compare::Gt, datum_a: val, datum_b: 0 }
+    pub fn gt(arg: u32, val: u64) -> Self {
+        ArgCmp { arg, op: Compare::Gt, a: val, b: 0 }
     }
 
     /// Tests whether the argument at index `arg` is greater than or equal to `val`.
-    pub fn ge(arg: u32, val: u64) -> (res: Self)
-        ensures res == (ArgCmp { arg, op: Compare::Ge, datum_a: val, datum_b: 0 })
-    {
-        ArgCmp { arg, op: Compare::Ge, datum_a: val, datum_b: 0 }
+    pub fn ge(arg: u32, val: u64) -> Self {
+        ArgCmp { arg, op: Compare::Ge, a: val, b: 0 }
     }
 
     /// Tests whether the argument at index `arg` equals `val` under `mask`.
-    pub fn masked_eq(arg: u32, mask: u64, val: u64) -> (res: Self)
-        ensures res == (ArgCmp { arg, op: Compare::MaskedEq, datum_a: mask, datum_b: val })
-    {
-        ArgCmp { arg, op: Compare::MaskedEq, datum_a: mask, datum_b: val }
+    pub fn masked_eq(arg: u32, mask: u64, val: u64) -> Self {
+        ArgCmp { arg, op: Compare::MaskedEq, a: mask, b: val }
     }
 }
 

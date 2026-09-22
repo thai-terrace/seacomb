@@ -55,7 +55,7 @@ impl Arch {
             b.emit_jump(JmpOp::Ge, Src::K(Self::X32_SYSCALL_BIT), false, end)?;
             proof {
                 assert forall |data: &[u8]| data@.len() == Program::SECCOMP_DATA_SIZE implies
-                    #[trigger] Event::of(data).x32_bit()
+                    #[trigger] Event::of(data).is_x32()
                         == (Event::of(data).nr as u32 >= Self::X32_SYSCALL_BIT) by {
                     Event::lemma_nr(Event::of(data));
                 }
