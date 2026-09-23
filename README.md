@@ -1,5 +1,8 @@
 # seacomb: formally verified seccomp compiler
 
+[![crates.io](https://img.shields.io/crates/v/seacomb.svg)](https://crates.io/crates/seacomb)
+[![docs.rs](https://img.shields.io/docsrs/seacomb)](https://docs.rs/seacomb)
+
 `seacomb` is a Rust library for compiling and enforcing
 [seccomp](https://man7.org/linux/man-pages/man2/seccomp.2.html) policies,
 which is a Linux kernel feature for filtering/intercepting syscalls and sandboxing.
