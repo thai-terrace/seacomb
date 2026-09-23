@@ -25,25 +25,35 @@ pub use crate::spec::{policy::*, syscall::*, cbpf::*};
 verus! {
 
 /// An error while creating, updating, compiling, or installing a filter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[verifier::external_derive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     /// Invalid errno number.
-    InvalidErrno,
+    #[error("invalid errno number {0}")]
+    InvalidErrno(u16),
     /// Invalid argument index (>= `ARG_COUNT_MAX`).
+    #[error("invalid argument index {0} (must be below {max})", max = Rule::ARG_COUNT_MAX)]
     InvalidArg(u32),
-    /// A multiplexed syscall rule has argument conditions; use `add_rule_exact`.
+    /// A multiplexed syscall rule cannot have argument conditions.
+    #[error("multiplexed syscall rule cannot have argument conditions; use add_rule_exact")]
     InvalidMuxConditions,
     /// The filter already includes this architecture.
+    #[error("filter already includes this architecture")]
     DuplicateArch,
     /// The native architecture is not supported.
+    #[error("native architecture is not supported")]
     UnsupportedNativeArch,
     /// The policy could not be compiled into a filter program.
-    Compile(CompileError),
+    #[error("failed to compile the policy")]
+    Compile(#[source] CompileError),
     /// The filter exceeds Linux's instruction limit.
+    #[error("filter exceeds the kernel's 4096-instruction limit")]
     FilterTooLarge,
     /// Failed to set `no_new_privs`.
+    #[error("failed to set no_new_privs: {}", std::io::Error::from_raw_os_error(*.0))]
     NoNewPrivsFailed(i32),
     /// Failed to install the seccomp filter.
+    #[error("failed to install the seccomp filter: {}", std::io::Error::from_raw_os_error(*.0))]
     InstallFailed(i32),
 }
 
@@ -107,7 +117,7 @@ impl Action {
         ensures (res is Ok) == self.wf()
     {
         match self {
-            Action::Errno(e) if (*e as u32) > Self::MAX_ERRNO => Err(Error::InvalidErrno),
+            Action::Errno(e) if (*e as u32) > Self::MAX_ERRNO => Err(Error::InvalidErrno(*e)),
             _ => Ok(()),
         }
     }

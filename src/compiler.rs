@@ -15,9 +15,11 @@ use builder::Builder;
 
 verus! {
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[verifier::external_derive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum CompileError {
-    /// The compiled program exceeds the jump offset limit.
+    /// The compiled program exceeds the cBPF jump offset limit.
+    #[error("compiled program exceeds the cBPF jump offset limit")]
     JmpIdxOverflow,
 }
 

@@ -6,6 +6,7 @@ description = "A formally verified seccomp compiler."
 license = "Apache-2.0 OR ISC OR MIT"
 
 [dependencies]
+thiserror = "2"
 vstd = { version = "=0.0.0-2026-09-20-0158" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
