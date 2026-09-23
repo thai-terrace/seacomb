@@ -2,6 +2,8 @@
 name = "seacomb"
 version = "0.1.0"
 edition = "2021"
+description = "A formally verified seccomp compiler."
+license = "Apache-2.0 OR ISC OR MIT"
 
 [dependencies]
 vstd = { version = "=0.0.0-2026-09-20-0158" }
