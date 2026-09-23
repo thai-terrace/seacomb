@@ -31,6 +31,8 @@ pub enum Error {
     InvalidErrno,
     /// Invalid argument index (>= `ARG_COUNT_MAX`).
     InvalidArg(u32),
+    /// A multiplexed syscall rule has argument conditions; use `add_rule_exact`.
+    InvalidMuxConditions,
     /// The filter already includes this architecture.
     DuplicateArch,
     /// The native architecture is not supported.
@@ -112,7 +114,7 @@ impl Action {
 }
 
 impl Rule {
-    /// Checks whether this rule has a valid action and argument indices.
+    /// Checks whether this rule has a valid action, argument indices, and mux mode.
     fn check(&self) -> (res: Result<(), Error>)
         ensures (res is Ok) == self.wf()
     {
@@ -130,6 +132,10 @@ impl Rule {
                 return Err(Error::InvalidArg(self.conds[i].arg));
             }
             i += 1;
+        }
+        if !self.no_mux && !self.conds.is_empty()
+            && (self.syscall.socketcall_arg().is_some() || self.syscall.ipc_arg().is_some()) {
+            return Err(Error::InvalidMuxConditions);
         }
         Ok(())
     }
@@ -250,10 +256,45 @@ impl Filter {
             final(self).policy().act_bad_arch == old(self).policy().act_bad_arch,
             res is Ok ==>
                 final(self).policy().rules@
-                == old(self).policy().rules@.push(Rule { action, syscall, conds }),
+                == old(self).policy().rules@.push(Rule { action, syscall, conds, no_mux: false }),
             res is Err ==> final(self).policy() == old(self).policy(),
     {
-        let rule = Rule { action, syscall, conds };
+        self.add_rule_with_mux(action, syscall, conds, false)
+    }
+
+    /// Adds a rule for the exact syscall number only. For example, on x86,
+    /// while `bind(..)` and `socketcall(2, ..)` have the same behavior,
+    /// adding a rule for `Syscall::Bind` only applies to the first case.
+    pub fn add_rule_exact(&mut self, action: Action, syscall: Syscall, conds: Vec<ArgCmp>)
+        -> (res: Result<(), Error>)
+        requires old(self).wf()
+        ensures
+            final(self).wf(),
+            final(self).policy().archs == old(self).policy().archs,
+            final(self).policy().act_no_match == old(self).policy().act_no_match,
+            final(self).policy().act_bad_arch == old(self).policy().act_bad_arch,
+            res is Ok ==>
+                final(self).policy().rules@
+                == old(self).policy().rules@.push(Rule { action, syscall, conds, no_mux: true }),
+            res is Err ==> final(self).policy() == old(self).policy(),
+    {
+        self.add_rule_with_mux(action, syscall, conds, true)
+    }
+
+    fn add_rule_with_mux(&mut self, action: Action, syscall: Syscall, conds: Vec<ArgCmp>, no_mux: bool)
+        -> (res: Result<(), Error>)
+        requires old(self).wf()
+        ensures
+            final(self).wf(),
+            final(self).policy().archs == old(self).policy().archs,
+            final(self).policy().act_no_match == old(self).policy().act_no_match,
+            final(self).policy().act_bad_arch == old(self).policy().act_bad_arch,
+            res is Ok ==>
+                final(self).policy().rules@
+                == old(self).policy().rules@.push(Rule { action, syscall, conds, no_mux }),
+            res is Err ==> final(self).policy() == old(self).policy(),
+    {
+        let rule = Rule { action, syscall, conds, no_mux };
         rule.check()?;
         // NOTE: libseccomp enforces that the action cannot be the default action,
         // but we do not have that restriction.

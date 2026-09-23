@@ -45,6 +45,9 @@ pub struct Rule {
     pub action: Action,
     pub syscall: Syscall,
     pub conds: Vec<ArgCmp>,
+    /// Prevents multiplexing syscalls. For example, a rule for `bind`
+    /// should not match `socketcall(2, ...)`.
+    pub no_mux: bool,
 }
 
 /// A set of rules with default actions for no-match and bad-arch cases.
@@ -101,6 +104,10 @@ impl Rule {
         &&& self.action.wf()
         &&& forall |i: int| #![trigger self.conds@[i]]
                 0 <= i < self.conds@.len() ==> self.conds@[i].arg < Self::ARG_COUNT_MAX
+        // When allowing mux, the rule should not have any conditions
+        // since the multiplexed call may have different argument positions.
+        // TODO: Ideally, we should only check this if x86 is enabled
+        &&& !self.no_mux && self.syscall.can_mux() ==> self.conds@.len() == 0
     }
 }
 
@@ -260,8 +267,8 @@ impl Rule {
             0 <= i < self.conds@.len() ==> self.conds@[i].eval(arch, ev.args);
         match ev.matches_syscall(arch, self.syscall) {
             SyscallMatch::Exact => conds_hold,
-            // This is stricter than libseccomp, which still evaluates the conditions on a multiplexed syscall.
-            SyscallMatch::Mux => self.conds@.len() == 0,
+            // NOTE: `Rule::wf` already enforces `self.conds@.len() == 0` if `!self.no_mux`
+            SyscallMatch::Mux => !self.no_mux,
             SyscallMatch::None => false,
         }
     }
@@ -272,7 +279,7 @@ impl Policy {
         &&& self.archs@.contains(arch)
         &&& ev.arch == arch.token()
         // Reject x32 syscall numbers, except -1, which a tracer uses to skip a syscall.
-        &&& arch == Arch::X86_64 ==> ev.nr & 0x40000000 == 0 || ev.nr == -1
+        &&& arch == Arch::X86_64 ==> ev.nr & 0x40000000 == 0 || Some(ev.nr) == Syscall::Skip.nr(arch)
     }
 
     /// Defines whether evaluating the policy on event `ev`

@@ -2211,6 +2211,12 @@ impl Syscall {
             _ => None,
         }
     }
+
+    /// Whether the syscall symbol may match more than one
+    /// concrete syscall numbers on one arch.
+    pub open spec fn can_mux(self) -> bool {
+        self.to_socketcall_arg() is Some || self.to_ipc_arg() is Some
+    }
 }
 
 } // verus!

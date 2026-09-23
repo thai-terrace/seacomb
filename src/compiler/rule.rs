@@ -1184,7 +1184,7 @@ impl Rule {
     /// The call number the x86 multiplexer selects this rule's syscall on, if one
     /// reaches it.
     pub(super) open spec fn spec_mux_arg(&self, arch: Arch) -> Option<u32> {
-        if arch != Arch::X86 || self.conds@.len() > 0 {
+        if arch != Arch::X86 || self.no_mux {
             None
         } else {
             match self.syscall.to_socketcall_arg() {
@@ -1202,7 +1202,7 @@ impl Rule {
     fn mux_arg(&self, arch: Arch) -> (res: Option<u32>)
         ensures res == self.spec_mux_arg(arch)
     {
-        if arch != Arch::X86 || !self.conds.is_empty() {
+        if arch != Arch::X86 || self.no_mux {
             return None;
         }
         match self.syscall.socketcall_arg() {
@@ -1215,7 +1215,7 @@ impl Rule {
 
     /// The number of the x86 multiplexer that also reaches this rule, if one does.
     pub(super) open spec fn spec_mux_nr(&self, arch: Arch) -> Option<u32> {
-        if arch != Arch::X86 || self.conds@.len() > 0 {
+        if arch != Arch::X86 || self.no_mux {
             None
         } else {
             let mux = if self.syscall.to_socketcall_arg() is Some {
@@ -1240,8 +1240,8 @@ impl Rule {
     pub(super) fn mux_nr(&self, arch: Arch) -> (res: Option<u32>)
         ensures res == self.spec_mux_nr(arch)
     {
-        // `Rule::eval` takes a multiplexed match only for a rule that tests no argument.
-        if arch != Arch::X86 || !self.conds.is_empty() {
+        // Exact rules do not emit a multiplexed match.
+        if arch != Arch::X86 || self.no_mux {
             return None;
         }
         let mux = if self.syscall.socketcall_arg().is_some() {

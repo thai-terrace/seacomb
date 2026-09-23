@@ -685,10 +685,10 @@ fn socket_rule_covers_direct_and_multiplexed_calls() {
 
 #[cfg(all(target_os = "linux", target_arch = "x86"))]
 #[test]
-fn conditional_socket_rule_only_covers_direct_call() {
+fn conditional_socket_rule_exact_only_covers_direct_call() {
     let mut filter = Filter::new_native(Action::Allow).unwrap();
     filter
-        .add_rule(
+        .add_rule_exact(
             Action::Errno(libc::EACCES as u16),
             Syscall::Socket,
             vec![ArgCmp::eq(0, 1)],
@@ -717,6 +717,31 @@ fn conditional_socket_rule_only_covers_direct_call() {
             || Child::errno() == libc::EACCES
         {
             return 3;
+        }
+        0
+    });
+    assert_eq!(child, Child::Exited(0));
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86"))]
+#[test]
+fn exact_socket_rule_excludes_socketcall_without_conditions() {
+    let mut filter = Filter::new_native(Action::Allow).unwrap();
+    filter
+        .add_rule_exact(Action::Errno(libc::EACCES as u16), Syscall::Socket, vec![])
+        .unwrap();
+    // SAFETY: Socket creation uses scalar arguments, and the socketcall array stays alive.
+    let child = Child::run(&filter, || unsafe {
+        if libc::syscall(libc::SYS_socket, 1 as libc::c_ulong, 0, 0) != -1
+            || Child::errno() != libc::EACCES
+        {
+            return 1;
+        }
+        let args = [0 as libc::c_ulong; 3];
+        if libc::syscall(libc::SYS_socketcall, 1 as libc::c_ulong, args.as_ptr()) != -1
+            || Child::errno() == libc::EACCES
+        {
+            return 2;
         }
         0
     });
@@ -758,6 +783,31 @@ fn ipc_rule_ignores_selector_version_bits() {
             if ret != -1 || Child::errno() != libc::EACCES {
                 return i as i32 + 2;
             }
+        }
+        0
+    });
+    assert_eq!(child, Child::Exited(0));
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86"))]
+#[test]
+fn exact_ipc_rule_excludes_multiplexed_call() {
+    let semget: libc::c_long = 393;
+    let mut filter = Filter::new_native(Action::Allow).unwrap();
+    filter
+        .add_rule_exact(Action::Errno(libc::EACCES as u16), Syscall::Semget, vec![])
+        .unwrap();
+    // SAFETY: Both calls select semget, which uses scalar arguments only.
+    let child = Child::run(&filter, || unsafe {
+        if libc::syscall(semget, 0 as libc::c_ulong, 0, 0) != -1
+            || Child::errno() != libc::EACCES
+        {
+            return 1;
+        }
+        if libc::syscall(libc::SYS_ipc, 0x1_0002 as libc::c_ulong, 0, 0, 0, 0) != -1
+            || Child::errno() == libc::EACCES
+        {
+            return 2;
         }
         0
     });
@@ -1021,6 +1071,7 @@ fn rule_checks_condition_indices() {
         action: Action::Allow,
         syscall: Syscall::Getpid,
         conds,
+        no_mux: false,
     };
     assert!(rule(vec![]).check().is_ok());
     assert!(rule((0..6).rev().map(|arg| ArgCmp::eq(arg, 0)).collect())
@@ -1072,6 +1123,7 @@ fn rule_checks_propagate_validation_errors() {
         action,
         syscall: Syscall::Getpid,
         conds,
+        no_mux: false,
     };
     assert!(rule(Action::Errno(1), vec![]).check().is_ok());
     assert!(matches!(
@@ -1099,4 +1151,22 @@ fn rule_checks_propagate_validation_errors() {
 fn skip_rule_is_allowed() {
     let mut filter = Filter::new_native(Action::Allow).unwrap();
     assert!(filter.add_rule(Action::Errno(1), Syscall::Skip, vec![ArgCmp::eq(5, 0)]).is_ok());
+}
+
+#[test]
+fn mux_rules_require_exact_mode_for_argument_conditions() {
+    let mut filter = Filter::new_native(Action::Allow).unwrap();
+    for syscall in [Syscall::Socket, Syscall::Semget] {
+        let conds = vec![ArgCmp::eq(0, 1)];
+        let rule_count = filter.policy.rules.len();
+        assert!(matches!(
+            filter.add_rule(Action::Errno(1), syscall, conds.clone()),
+            Err(Error::InvalidMuxConditions)
+        ));
+        assert_eq!(filter.policy.rules.len(), rule_count);
+        filter.add_rule_exact(Action::Errno(1), syscall, conds).unwrap();
+        assert!(filter.policy.rules.last().unwrap().no_mux);
+    }
+    filter.add_rule(Action::Errno(1), Syscall::Socket, vec![]).unwrap();
+    assert!(!filter.policy.rules.last().unwrap().no_mux);
 }

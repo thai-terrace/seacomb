@@ -156,6 +156,9 @@ impl Policy {
         ensures self.eval(ev, self.blocks(ev, i))
         decreases self.archs@.len() - i
     {
+        assert(Syscall::Skip.spec_nr(Arch::X86_64) == Some(-1i32)) by {
+            reveal(Syscall::spec_nr);
+        }
         if i >= self.archs@.len() {
             assert forall |a: Arch| !self.is_active_arch(a, ev) by {
                 if self.is_active_arch(a, ev) {

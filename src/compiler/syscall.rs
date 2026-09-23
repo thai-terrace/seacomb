@@ -8,7 +8,7 @@ verus! {
 
 impl Syscall {
     /// Executable version of [`Syscall::to_socketcall_arg`].
-    pub(super) fn socketcall_arg(&self) -> (res: Option<u64>)
+    pub(crate) fn socketcall_arg(&self) -> (res: Option<u64>)
         ensures res == self.to_socketcall_arg()
     {
         match self {
@@ -37,7 +37,7 @@ impl Syscall {
     }
 
     /// Executable version of [`Syscall::to_ipc_arg`].
-    pub(super) fn ipc_arg(&self) -> (res: Option<u64>)
+    pub(crate) fn ipc_arg(&self) -> (res: Option<u64>)
         ensures res == self.to_ipc_arg()
     {
         match self {
