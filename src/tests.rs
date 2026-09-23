@@ -618,12 +618,36 @@ fn x86_64_unmatched_syscall_numbers_select_abi_default() {
                     0 as libc::c_ulong,
                 )
             };
-            let expected = if *nr & 0x4000_0000 != 0 { libc::EPERM } else { libc::EACCES };
+            let expected = if *nr != -1 && *nr & 0x4000_0000 != 0 {
+                libc::EPERM
+            } else {
+                libc::EACCES
+            };
             if ret != -1 || Child::errno() != expected {
                 return i as i32 + 1;
             }
         }
         0
+    });
+    assert_eq!(child, Child::Exited(0));
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_pointer_width = "64"))]
+#[test]
+fn x86_64_skip_rule_matches_minus_one() {
+    let mut filter = Filter::new_native(Action::Allow).unwrap();
+    filter.on_bad_arch(Action::Errno(libc::EPERM as u16)).unwrap();
+    filter
+        .add_rule(Action::Errno(libc::EACCES as u16), Syscall::Skip, vec![])
+        .unwrap();
+    let child = Child::run(&filter, || {
+        // SAFETY: The filter returns EACCES before the invalid syscall reaches the kernel.
+        let ret = unsafe { libc::syscall(-1 as libc::c_long) };
+        if ret == -1 && Child::errno() == libc::EACCES {
+            0
+        } else {
+            1
+        }
     });
     assert_eq!(child, Child::Exited(0));
 }
@@ -701,7 +725,7 @@ fn conditional_socket_rule_only_covers_direct_call() {
 
 #[cfg(all(target_os = "linux", target_arch = "x86"))]
 #[test]
-fn ipc_rule_checks_the_full_low_word_of_selector() {
+fn ipc_rule_ignores_selector_version_bits() {
     // The i386 semget number in `arch/x86/entry/syscalls/syscall_32.tbl`.
     let semget: libc::c_long = 393;
     let mut filter = Filter::new_native(Action::Allow).unwrap();
@@ -731,12 +755,7 @@ fn ipc_rule_checks_the_full_low_word_of_selector() {
                 0 as libc::c_ulong,
                 0 as libc::c_ulong,
             );
-            let expected = if *selector == 2 {
-                libc::EACCES
-            } else {
-                libc::EINVAL
-            };
-            if ret != -1 || Child::errno() != expected {
+            if ret != -1 || Child::errno() != libc::EACCES {
                 return i as i32 + 2;
             }
         }

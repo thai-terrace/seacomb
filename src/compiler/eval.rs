@@ -9,7 +9,7 @@ impl Arch {
     /// Whether the architecture guard accepts the event's token and syscall ABI.
     pub(crate) open spec fn matches_event(self, ev: Event) -> bool {
         &&& ev.arch == self.token()
-        &&& self == Arch::X86_64 ==> ev.nr & 0x4000_0000 == 0
+        &&& self == Arch::X86_64 ==> ev.nr & 0x4000_0000 == 0 || ev.nr == -1
     }
 }
 
@@ -27,6 +27,14 @@ impl Syscall {
 }
 
 impl Rule {
+    /// The cBPF low word contains the kernel's 16-bit ipc selector.
+    pub(super) proof fn lemma_ipc_selector(x: u64)
+        ensures (x & 0xFFFF) as u32 == ((x & 0xFFFF_FFFF) as u32) & 0xFFFF
+    {
+        assert((x & 0xFFFF) as u32 == ((x & 0xFFFF_FFFF) as u32) & 0xFFFF)
+            by (bit_vector);
+    }
+
     /// Whether the rule's conditions from `i` on hold of `ev` on `arch`.
     pub(super) open spec fn conds_hold(self, arch: Arch, ev: Event, i: int) -> bool {
         forall |j: int| #![trigger self.conds@[j]]
@@ -36,7 +44,8 @@ impl Rule {
     /// Whether the rule's body accepts `ev`, the test for syscall number `nr` having passed.
     pub(super) open spec fn body_holds(self, arch: Arch, nr: u32, ev: Event) -> bool {
         if self.spec_mux_nr(arch) == Some(nr) {
-            self.spec_mux_arg(arch) == Some((ev.args[0] & 0xFFFF_FFFF) as u32)
+            self.spec_mux_arg(arch) == Some((ev.args[0]
+                & if self.syscall.to_ipc_arg() is Some { 0xFFFF } else { 0xFFFF_FFFF }) as u32)
         } else {
             self.conds_hold(arch, ev, 0)
         }
@@ -66,8 +75,10 @@ impl Rule {
     {
         broadcast use Syscall::lemma_mux_nr;
         ev.lemma_nr();
-        // The multiplexer's call number is the low word of the first argument.
+        // Socketcall reads the low word; ipc reads the low 16 bits.
         assert(forall |x: u64| #[trigger] (x & 0xFFFF_FFFF) < 0x1_0000_0000) by (bit_vector);
+        assert(forall |x: u64| #[trigger] (x & 0xFFFF) < 0x1_0000_0000) by (bit_vector);
+        Self::lemma_ipc_selector(ev.args[0]);
     }
 }
 

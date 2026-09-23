@@ -173,7 +173,8 @@ impl Event {
             ||| Syscall::Socketcall.nr(arch) == Some(self.nr)
                 && name.to_socketcall_arg() == Some(self.args[0] & arch.mask())
             ||| Syscall::Ipc.nr(arch) == Some(self.nr)
-                && name.to_ipc_arg() == Some(self.args[0] & arch.mask())
+                // The kernel dispatches on the low 16 bits of the call number.
+                && name.to_ipc_arg() == Some(self.args[0] & 0xFFFF)
         } {
             SyscallMatch::Mux
         } else {
@@ -270,8 +271,8 @@ impl Policy {
     pub open spec fn is_active_arch(self, arch: Arch, ev: Event) -> bool {
         &&& self.archs@.contains(arch)
         &&& ev.arch == arch.token()
-        // Make sure that X32 syscalls are not treated as unsupported X86_64 syscalls.
-        &&& arch == Arch::X86_64 ==> ev.nr & 0x40000000 == 0
+        // Reject x32 syscall numbers, except -1, which a tracer uses to skip a syscall.
+        &&& arch == Arch::X86_64 ==> ev.nr & 0x40000000 == 0 || ev.nr == -1
     }
 
     /// Defines whether evaluating the policy on event `ev`

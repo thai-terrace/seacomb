@@ -1009,6 +1009,7 @@ impl Rule {
     /// selects on, and that selector is the only test:
     /// ```text
     ///     ld  [arg 0]
+    ///     and #0xffff         ; ipc only
     ///     jne #selector -> end
     ///     ret #action
     /// end:
@@ -1047,7 +1048,12 @@ impl Rule {
             if self.mux_nr(arch) == Some(nr) {
                 b.emit_jump(JmpOp::Eq, Src::K(arg), false, end)?;
                 let ghost r_sel = b.rev@;
-                let ghost r_arg = r_sel.push(Instr::LdAbs(Policy::OFFSET_EVENT_ARGS));
+                let is_ipc = self.syscall.ipc_arg().is_some();
+                if is_ipc {
+                    b.emit(Instr::Alu(AluOp::And, Src::K(0xFFFF)));
+                }
+                let ghost r_mask = b.rev@;
+                let ghost r_arg = r_mask.push(Instr::LdAbs(Policy::OFFSET_EVENT_ARGS));
                 proof {
                     Builder::lemma_ld(r_arg, Policy::OFFSET_EVENT_ARGS);
                     assert forall |data: &[u8], a: u32|
@@ -1059,14 +1065,27 @@ impl Rule {
                         assert(Builder::word(data, (Policy::OFFSET_EVENT_ARGS + 8 * 0) as u32)
                             == (Event::of(data).args[0] & 0xFFFF_FFFF) as u32);
                         let w = Builder::word(data, Policy::OFFSET_EVENT_ARGS);
-                        assert(w == arg);
+                        let selector = if is_ipc { w & 0xFFFF } else { w };
+                        Self::lemma_ipc_selector(Event::of(data).args[0]);
+                        assert(selector == arg);
                         assert(Builder::goes_to_all(r_arg, data, r_arg.len(),
                             (r_arg.len() - 1) as nat, w));
-                        assert(Builder::goes_to(r_arg, data, r_arg.len(), a, r_sel.len(), w));
-                        assert(Builder::goes_to(r_sel, data, r_sel.len(), w, r_ret.len(), w));
-                        Builder::lemma_then(r_ret, r_sel, data, r_sel.len(), w, r_ret.len(), w,
+                        assert(Builder::goes_to(r_arg, data, r_arg.len(), a, r_mask.len(), w));
+                        assert(Builder::goes_to(r_sel, data, r_sel.len(), selector,
+                            r_ret.len(), selector));
+                        Builder::lemma_then(r_ret, r_sel, data, r_sel.len(), selector,
+                            r_ret.len(), selector,
                             0, self.action.to_ret());
-                        Builder::lemma_then(r_sel, r_arg, data, r_arg.len(), a, r_sel.len(), w,
+                        if is_ipc {
+                            Builder::lemma_alu(r_mask, AluOp::And, 0xFFFF);
+                            assert(Builder::goes_to(r_mask, data, r_mask.len(), w,
+                                r_sel.len(), selector));
+                            Builder::lemma_then(r_sel, r_mask, data, r_mask.len(), w,
+                                r_sel.len(), selector, 0, self.action.to_ret());
+                        } else {
+                            assert(r_mask == r_sel);
+                        }
+                        Builder::lemma_then(r_mask, r_arg, data, r_arg.len(), a, r_mask.len(), w,
                             0, self.action.to_ret());
                     }
                     assert forall |data: &[u8], a: u32|
@@ -1078,13 +1097,26 @@ impl Rule {
                         assert(Builder::word(data, (Policy::OFFSET_EVENT_ARGS + 8 * 0) as u32)
                             == (Event::of(data).args[0] & 0xFFFF_FFFF) as u32);
                         let w = Builder::word(data, Policy::OFFSET_EVENT_ARGS);
-                        assert(w != arg);
+                        let selector = if is_ipc { w & 0xFFFF } else { w };
+                        Self::lemma_ipc_selector(Event::of(data).args[0]);
+                        assert(selector != arg);
                         assert(Builder::goes_to_all(r_arg, data, r_arg.len(),
                             (r_arg.len() - 1) as nat, w));
-                        assert(Builder::goes_to(r_arg, data, r_arg.len(), a, r_sel.len(), w));
-                        assert(Builder::goes_to(r_sel, data, r_sel.len(), w, end as nat, w));
-                        assert(Builder::lands(r_sel, data, r_sel.len(), w, end as nat));
-                        Builder::lemma_then(r_sel, r_arg, data, r_arg.len(), a, r_sel.len(), w,
+                        assert(Builder::goes_to(r_arg, data, r_arg.len(), a, r_mask.len(), w));
+                        assert(Builder::goes_to(r_sel, data, r_sel.len(), selector,
+                            end as nat, selector));
+                        assert(Builder::lands(r_sel, data, r_sel.len(), selector, end as nat));
+                        if is_ipc {
+                            Builder::lemma_alu(r_mask, AluOp::And, 0xFFFF);
+                            assert(Builder::goes_to(r_mask, data, r_mask.len(), w,
+                                r_sel.len(), selector));
+                            Builder::lemma_then(r_sel, r_mask, data, r_mask.len(), w,
+                                r_sel.len(), selector, end as nat, w);
+                        } else {
+                            assert(r_mask == r_sel);
+                        }
+                        assert(Builder::lands(r_mask, data, r_mask.len(), w, end as nat));
+                        Builder::lemma_then(r_mask, r_arg, data, r_arg.len(), a, r_mask.len(), w,
                             end as nat, w);
                     }
                 }

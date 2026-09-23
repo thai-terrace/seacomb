@@ -27,6 +27,7 @@ impl Arch {
     ///     ld  [arch]
     ///     jne #token -> end
     ///     ld  [nr]
+    ///     jeq #-1 -> body      (x86_64 only)
     ///     jset #0x40000000 -> end  (x86_64 only)
     /// ```
     fn emit_guard(self, b: &mut Builder, end: Label) -> (res: Result<(), CompileError>)
@@ -49,7 +50,46 @@ impl Arch {
     {
         let ghost body = b.rev@;
         if self == Arch::X86_64 {
+            let skip = b.label();
             b.emit_jump(JmpOp::Set, Src::K(0x4000_0000), true, end)?;
+            let ghost x32_guard = b.rev@;
+            b.emit_jump(JmpOp::Eq, Src::K(u32::MAX), true, skip)?;
+            proof {
+                assert forall |data: &[u8], signed_nr: i32|
+                    signed_nr & 0x4000_0000 == 0 || signed_nr == -1 implies
+                    #[trigger] Builder::goes_to(b.rev@, data, b.rev@.len(), signed_nr as u32,
+                        body.len(), signed_nr as u32) by {
+                    let nr = signed_nr as u32;
+                    assert(((signed_nr as u32) & 0x4000_0000 == 0)
+                        <==> (signed_nr & 0x4000_0000 == 0)) by (bit_vector);
+                    assert(((signed_nr as u32) == u32::MAX) <==> (signed_nr == -1))
+                        by (bit_vector);
+                    if signed_nr != -1 {
+                        assert(Builder::goes_to(b.rev@, data, b.rev@.len(), nr,
+                            x32_guard.len(), nr));
+                        assert(Builder::goes_to(x32_guard, data, x32_guard.len(), nr,
+                            body.len(), nr));
+                        Builder::lemma_then(x32_guard, b.rev@, data, b.rev@.len(), nr,
+                            x32_guard.len(), nr, body.len(), nr);
+                    }
+                }
+                assert forall |data: &[u8], signed_nr: i32|
+                    signed_nr & 0x4000_0000 != 0 && signed_nr != -1 implies
+                    #[trigger] Builder::goes_to(b.rev@, data, b.rev@.len(), signed_nr as u32,
+                        end as nat, signed_nr as u32) by {
+                    let nr = signed_nr as u32;
+                    assert(((signed_nr as u32) & 0x4000_0000 == 0)
+                        <==> (signed_nr & 0x4000_0000 == 0)) by (bit_vector);
+                    assert(((signed_nr as u32) == u32::MAX) <==> (signed_nr == -1))
+                        by (bit_vector);
+                    assert(Builder::goes_to(b.rev@, data, b.rev@.len(), nr,
+                        x32_guard.len(), nr));
+                    assert(Builder::goes_to(x32_guard, data, x32_guard.len(), nr,
+                        end as nat, nr));
+                    Builder::lemma_then(x32_guard, b.rev@, data, b.rev@.len(), nr,
+                        x32_guard.len(), nr, end as nat, nr);
+                }
+            }
         }
         let ghost guarded_nr = b.rev@;
         b.emit(Instr::LdAbs(Policy::OFFSET_EVENT_NR));
@@ -80,9 +120,6 @@ impl Arch {
                 let to = if self.matches_event(ev) { body.len() } else { end as nat };
                 Event::lemma_image(data);
                 if ev.arch == self.token() {
-                    let signed_nr = ev.nr;
-                    assert((signed_nr as u32 & 0x4000_0000 == 0)
-                        <==> (signed_nr & 0x4000_0000 == 0)) by (bit_vector);
                     assert(Builder::goes_to(guarded_nr, data, guarded_nr.len(), nr, to, nr));
                     Builder::lemma_then(guarded_nr, loaded_nr, data, loaded_nr.len(), ev.arch,
                         guarded_nr.len(), nr, to, nr);
