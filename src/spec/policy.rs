@@ -300,13 +300,8 @@ impl Policy {
             // 2. If two actions have the same precedence (e.g. `Errno(1)` and `Errno(2)`),
             //    the rule that was added last wins.
             //
-            // In particular, this should imply that if we install two policies consecutively:
-            // ```
-            // policy1.install();
-            // policy2.install();
-            // ```
-            // then the resulting behavior is equivalent to installing `policy1 + policy2` once.
-            // (assuming other equal flags).
+            // In particular, this makes installing multiple filters more well-behaved
+            // see for example [`crate::prop::theorem_eval_chain_compiled`].
             &&& forall |j: int| #![trigger self.rules@[j]]
                     0 <= j < self.rules@.len() && j != i && self.rules@[j].eval(a, ev)
                     ==> {
