@@ -1,4 +1,4 @@
-//! Top-level APIs for building and installing policies.
+#![doc = include_str!("../README.md")]
 
 #![deny(unsafe_op_in_unsafe_fn)]
 #![deny(unused_must_use)]
@@ -11,15 +11,16 @@
 
 mod asm;
 mod compiler;
-pub mod spec;
+mod spec;
 pub mod prop;
 
 #[cfg(test)]
 mod tests;
 
 use vstd::prelude::*;
-use crate::spec::{policy::*, syscall::*};
+
 pub use crate::compiler::CompileError;
+pub use crate::spec::{policy::*, syscall::*, cbpf::*};
 
 verus! {
 

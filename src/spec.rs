@@ -1,4 +1,4 @@
-pub mod cbpf;
-pub mod chain;
-pub mod policy;
-pub mod syscall;
+pub(crate) mod cbpf;
+pub(crate) mod chain;
+pub(crate) mod policy;
+pub(crate) mod syscall;
