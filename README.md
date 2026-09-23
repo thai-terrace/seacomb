@@ -1,30 +1,42 @@
-# seacomb
+# seacomb: formally verified seccomp compiler
 
 `seacomb` is a Rust library for compiling and enforcing
-[seccomp](https://man7.org/linux/man-pages/man2/seccomp.2.html) policies
-(i.e., for filtering/intercepting Linux syscalls and sandboxing).
+[seccomp](https://man7.org/linux/man-pages/man2/seccomp.2.html) policies,
+which is a Linux kernel feature for filtering/intercepting syscalls and sandboxing.
+For example, [Chrome](https://chromium.googlesource.com/chromium/src/+/main/sandbox/linux/README.md)
+and [Firefox](https://wiki.mozilla.org/Security/Sandbox/Seccomp)
+use seccomp to sandbox the processes that render web pages,
+and [Docker](https://docs.docker.com/engine/security/seccomp/)
+and [systemd](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#SystemCallFilter=)
+use it to restrict containers and services.
 
 By declaring rules in a similar style to [libseccomp](https://github.com/seccomp/libseccomp),
 `seacomb` compiles and registers these rules using a *formally verified* compiler to cBPF.
 
-```rust,no_run
+```rust
 use seacomb::*;
+use std::io::Write;
 
-// Set default action to killing the process.
-let mut filter = Filter::new_native(Action::KillProcess).unwrap();
+// Allow any syscall when no rule matches.
+let mut filter = Filter::new_native(Action::Allow).unwrap();
 
-filter.add_rule(Action::Allow, Syscall::Read, vec![]).unwrap();
-filter.add_rule(Action::Allow, Syscall::ExitGroup, vec![]).unwrap();
+// Make write to stderr (fd 2) fail with EPERM.
+filter.add_rule(Action::Errno(1), Syscall::Write, vec![ArgCmp::eq(0, 2)]).unwrap();
 
-// Allow write(2) to stdout (fd 1) only.
-filter.add_rule(Action::Allow, Syscall::Write, vec![ArgCmp::eq(0, 1)]).unwrap();
-
-// Make openat(2) fail with EACCES.
-filter.add_rule(Action::Errno(13), Syscall::Openat, vec![]).unwrap();
+// Kill the process on execve(2).
+filter.add_rule(Action::KillProcess, Syscall::Execve, vec![]).unwrap();
 
 #[cfg(target_os = "linux")]
-filter.install().unwrap();
+{
+    filter.install().unwrap();
+
+    assert!(std::io::stdout().write_all(b"Hello from stdout!\n").is_ok());
+    let err = std::io::stderr().write_all(b"Hello from stderr!\n").unwrap_err();
+    assert_eq!(err.raw_os_error(), Some(1));
+}
 ```
+
+Supported architectures: x86, x86-64, 32-bit ARM (little-endian), and AArch64.
 
 ## What has been formally verified
 
@@ -62,3 +74,10 @@ To run all tests on all supported architectures, or on one:
 python3 tests/run.py
 python3 tests/run.py aarch64
 ```
+
+## Related work
+
+- [Jitk: A Trustworthy In-Kernel Interpreter Infrastructure](https://dl.acm.org/doi/10.5555/2685048.2685052)
+- [libseccomp](https://github.com/seccomp/libseccomp)
+  (Rust binding: [libseccomp-rs](https://github.com/libseccomp-rs/libseccomp-rs))
+- [seccompiler](https://github.com/rust-vmm/seccompiler)
