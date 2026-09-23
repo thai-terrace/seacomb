@@ -40,6 +40,9 @@ pub enum Error {
     /// The filter already includes this architecture.
     #[error("filter already includes this architecture")]
     DuplicateArch,
+    /// The filter has no architectures enabled.
+    #[error("filter has no architectures enabled")]
+    NoArch,
     /// The native architecture is not supported.
     #[error("native architecture is not supported")]
     UnsupportedNativeArch,
@@ -399,6 +402,9 @@ impl Filter {
     pub fn install(&self) -> Result<(), Error>
         requires self.wf()
     {
+        if self.policy.archs.is_empty() {
+            return Err(Error::NoArch);
+        }
         let program = match self.policy.to_cbpf() {
             Ok(program) => program,
             Err(err) => return Err(Error::Compile(err)),

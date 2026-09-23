@@ -16,7 +16,7 @@ fn native_constructor_adds_only_native() {
     }
     assert!(matches!(
         Filter::new_native(Action::Errno(4096)),
-        Err(Error::InvalidErrno)
+        Err(Error::InvalidErrno(_))
     ));
 }
 
@@ -78,7 +78,7 @@ fn action_payload_boundaries() {
     for errno in [4096, u16::MAX] {
         assert!(matches!(
             Filter::new(Action::Errno(errno)),
-            Err(Error::InvalidErrno)
+            Err(Error::InvalidErrno(_))
         ));
     }
 }
@@ -262,10 +262,12 @@ fn native_constructor_preserves_default() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn empty_architectures_always_take_bad_arch() {
+fn empty_architectures_cannot_be_installed() {
     let mut filter = Filter::new(Action::Allow).unwrap();
     filter.on_bad_arch(Action::KillProcess).unwrap();
-    assert_eq!(Child::run(&filter, || 0), Child::Killed(libc::SIGSYS));
+    assert_eq!(Child::run_unfiltered(|| {
+        if matches!(filter.install(), Err(Error::NoArch)) { 0 } else { 1 }
+    }), Child::Exited(0));
 }
 
 #[cfg(target_os = "linux")]
@@ -303,10 +305,16 @@ fn invalid_updates_preserve_existing_rules() {
 #[test]
 fn invalid_bad_arch_preserves_previous_action() {
     let mut filter = Filter::new(Action::Allow).unwrap();
+    let absent = if Arch::native().unwrap() == Arch::X86 {
+        Arch::Aarch64
+    } else {
+        Arch::X86
+    };
+    filter.add_arch(absent).unwrap();
     filter.on_bad_arch(Action::KillProcess).unwrap();
     assert!(matches!(
         filter.on_bad_arch(Action::Errno(4096)),
-        Err(Error::InvalidErrno)
+        Err(Error::InvalidErrno(_))
     ));
     assert_eq!(Child::run(&filter, || 0), Child::Killed(libc::SIGSYS));
 }
@@ -1112,7 +1120,7 @@ fn action_checks_return_validation_errors() {
     for errno in [4096, u16::MAX] {
         assert!(matches!(
             Action::Errno(errno).check(),
-            Err(Error::InvalidErrno)
+            Err(Error::InvalidErrno(_))
         ));
     }
 }
@@ -1128,7 +1136,7 @@ fn rule_checks_propagate_validation_errors() {
     assert!(rule(Action::Errno(1), vec![]).check().is_ok());
     assert!(matches!(
         rule(Action::Errno(4096), vec![]).check(),
-        Err(Error::InvalidErrno)
+        Err(Error::InvalidErrno(_))
     ));
     assert!(Filter::new_native(Action::Allow)
         .unwrap()
