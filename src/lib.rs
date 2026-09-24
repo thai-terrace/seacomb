@@ -27,6 +27,7 @@ verus! {
 /// An error while creating, updating, compiling, or installing a filter.
 #[verifier::external_derive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     /// Invalid errno number.
     #[error("invalid errno number {0}")]

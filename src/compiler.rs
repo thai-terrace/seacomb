@@ -17,6 +17,7 @@ verus! {
 
 #[verifier::external_derive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum CompileError {
     /// The compiled program exceeds the cBPF jump offset limit.
     #[error("compiled program exceeds the cBPF jump offset limit")]

@@ -1,9 +1,14 @@
 [package]
 name = "seacomb"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "A formally verified seccomp compiler."
 license = "Apache-2.0 OR ISC OR MIT"
+repository = "https://github.com/thai-terrace/seacomb"
+keywords = ["seccomp", "sandbox", "bpf", "verus", "formal-verification"]
+categories = ["os::linux-apis", "compilers"]
+rust-version = "1.98"
+exclude = [".github/", "tests/"]
 
 [dependencies]
 thiserror = "2"
