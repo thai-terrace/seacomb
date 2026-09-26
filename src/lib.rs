@@ -10,6 +10,7 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
 
 mod asm;
+mod check;
 mod compiler;
 mod spec;
 pub mod prop;
@@ -20,6 +21,7 @@ mod tests;
 use vstd::prelude::*;
 
 pub use crate::compiler::CompileError;
+pub use crate::check::CheckError;
 pub use crate::spec::{policy::*, syscall::*, cbpf::*};
 
 verus! {
@@ -29,27 +31,18 @@ verus! {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
-    /// Invalid errno number.
-    #[error("invalid errno number {0}")]
-    InvalidErrno(u16),
-    /// Invalid argument index (>= `ARG_COUNT_MAX`).
-    #[error("invalid argument index {0} (must be below {max})", max = Rule::ARG_COUNT_MAX)]
-    InvalidArg(u32),
-    /// A multiplexed syscall rule cannot have argument conditions.
-    #[error("multiplexed syscall rule cannot have argument conditions; use add_rule_exact")]
-    InvalidMuxConditions,
-    /// The filter already includes this architecture.
-    #[error("filter already includes this architecture")]
-    DuplicateArch,
+    /// The policy fails a well-formedness check.
+    #[error("failed to validate the policy")]
+    Check(#[source] CheckError),
+    /// The policy could not be compiled into a filter program.
+    #[error("failed to compile the policy")]
+    Compile(#[source] CompileError),
     /// The filter has no architectures enabled.
     #[error("filter has no architectures enabled")]
     NoArch,
     /// The native architecture is not supported.
     #[error("native architecture is not supported")]
     UnsupportedNativeArch,
-    /// The policy could not be compiled into a filter program.
-    #[error("failed to compile the policy")]
-    Compile(#[source] CompileError),
     /// The filter exceeds Linux's instruction limit.
     #[error("filter exceeds the kernel's 4096-instruction limit")]
     FilterTooLarge,
@@ -115,46 +108,6 @@ impl ArgCmp {
     }
 }
 
-impl Action {
-    /// Checks whether this action contains a valid value.
-    fn check(&self) -> (res: Result<(), Error>)
-        ensures (res is Ok) == self.wf()
-    {
-        match self {
-            Action::Errno(e) if (*e as u32) > Self::MAX_ERRNO => Err(Error::InvalidErrno(*e)),
-            _ => Ok(()),
-        }
-    }
-}
-
-impl Rule {
-    /// Checks whether this rule has a valid action, argument indices, and mux mode.
-    fn check(&self) -> (res: Result<(), Error>)
-        ensures (res is Ok) == self.wf()
-    {
-        self.action.check()?;
-        let mut i: usize = 0;
-        while i < self.conds.len()
-            invariant
-                self.action.wf(),
-                i <= self.conds@.len(),
-                forall |k: int| #![trigger self.conds@[k]]
-                    0 <= k < i ==> self.conds@[k].arg < Self::ARG_COUNT_MAX,
-            decreases self.conds@.len() - i
-        {
-            if self.conds[i].arg >= Self::ARG_COUNT_MAX {
-                return Err(Error::InvalidArg(self.conds[i].arg));
-            }
-            i += 1;
-        }
-        if !self.no_mux && !self.conds.is_empty()
-            && (self.syscall.socketcall_arg().is_some() || self.syscall.ipc_arg().is_some()) {
-            return Err(Error::InvalidMuxConditions);
-        }
-        Ok(())
-    }
-}
-
 /// A policy under construction and its filter options.
 #[derive(Debug, Clone, PartialEq, Eq)]
 // Verus does not yet model non-Copy Clone derives.
@@ -189,7 +142,9 @@ impl Filter {
             &&& f.policy().rules@.len() == 0
         }
     {
-        act_no_match.check()?;
+        if let Err(err) = act_no_match.check() {
+            return Err(Error::Check(err));
+        }
         Ok(Filter {
             policy: Policy {
                 archs: Vec::new(),
@@ -239,9 +194,27 @@ impl Filter {
             decreases self.policy.archs@.len() - i
         {
             if self.policy.archs[i] == arch {
-                return Err(Error::DuplicateArch);
+                return Err(Error::Check(CheckError::DuplicateArch));
             }
             i += 1;
+        }
+
+        let mut prospective = self.policy.archs.clone();
+        prospective.push(arch);
+        let mut r: usize = 0;
+        while r < self.policy.rules.len()
+            invariant
+                self.wf(),
+                prospective@ == self.policy.archs@.push(arch),
+                r <= self.policy.rules@.len(),
+                forall |k: int| 0 <= k < r ==>
+                    #[trigger] self.policy.rules@[k].wf(prospective@),
+            decreases self.policy.rules@.len() - r
+        {
+            if let Err(err) = self.policy.rules[r].check(prospective.as_slice()) {
+                return Err(Error::Check(err));
+            }
+            r += 1;
         }
 
         let ghost prev = self.policy.archs@;
@@ -254,6 +227,10 @@ impl Filter {
                 } else {
                     assert(prev[k] != arch);
                 }
+            }
+            assert forall |k: int| 0 <= k < self.policy.rules@.len()
+                implies #[trigger] self.policy.rules@[k].wf(self.policy.archs@) by {
+                assert(self.policy.rules@[k].wf(prospective@));
             }
         }
         Ok(())
@@ -309,7 +286,9 @@ impl Filter {
             res is Err ==> final(self).policy() == old(self).policy(),
     {
         let rule = Rule { action, syscall, conds, no_mux };
-        rule.check()?;
+        if let Err(err) = rule.check(self.policy.archs.as_slice()) {
+            return Err(Error::Check(err));
+        }
         // NOTE: libseccomp enforces that the action cannot be the default action,
         // but we do not have that restriction.
 
@@ -317,9 +296,9 @@ impl Filter {
         self.policy.rules.push(rule);
         proof {
             assert forall |k: int| 0 <= k < self.policy.rules@.len()
-                implies #[trigger] self.policy.rules@[k].wf() by {
+                implies #[trigger] self.policy.rules@[k].wf(self.policy.archs@) by {
                 if k < prev.len() {
-                    assert(prev[k].wf());
+                    assert(prev[k].wf(self.policy.archs@));
                 }
             }
         }
@@ -337,7 +316,9 @@ impl Filter {
             res is Ok ==> final(self).policy().act_bad_arch == act,
             res is Err ==> final(self).policy() == old(self).policy(),
     {
-        act.check()?;
+        if let Err(err) = act.check() {
+            return Err(Error::Check(err));
+        }
         self.policy.act_bad_arch = act;
         Ok(())
     }

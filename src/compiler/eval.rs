@@ -38,7 +38,7 @@ impl Rule {
     /// Whether the rule's conditions from `i` on hold of `ev` on `arch`.
     pub(super) open spec fn conds_hold(self, arch: Arch, ev: Event, i: int) -> bool {
         forall |j: int| #![trigger self.conds@[j]]
-            i <= j < self.conds@.len() ==> self.conds@[j].eval(arch, ev.args)
+            i <= j < self.conds@.len() ==> self.conds@[j].eval(arch, self.syscall, ev.args)
     }
 
     /// Whether the rule's body accepts `ev`, the test for syscall number `nr` having passed.

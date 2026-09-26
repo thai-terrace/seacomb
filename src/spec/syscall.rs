@@ -80,14 +80,14 @@ macro_rules! syscalls {
                 /// verifying all ~1600 arms takes too long.
                 #[verifier::external_body]
                 #[allow(unreachable_patterns)]
-                pub fn signature(&self, arch: super::policy::Arch) -> (res: Vec<PrimType>)
+                pub fn signature(&self, arch: super::policy::Arch) -> (res: &'static [PrimType])
                     ensures res@ =~= self.spec_signature(arch)
                 {
                     match self {
                         $(
                             $name::$variant => match arch {
-                                $( super::policy::Arch::$arch => vec![$( PrimType::$ty $(($width))? ),*], )*
-                                _ => Vec::new(),
+                                $( super::policy::Arch::$arch => &[$( PrimType::$ty $(($width))? ),*], )*
+                                _ => &[],
                             },
                         )*
                     }

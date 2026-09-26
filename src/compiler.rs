@@ -22,6 +22,12 @@ pub enum CompileError {
     /// The compiled program exceeds the cBPF jump offset limit.
     #[error("compiled program exceeds the cBPF jump offset limit")]
     JmpIdxOverflow,
+    /// A syscall signature uses more argument slots than `seccomp_data` provides.
+    #[error("syscall signature exceeds the available argument slots")]
+    SignatureLayout,
+    /// A syscall argument width cannot be represented by this compiler.
+    #[error("unsupported syscall argument width {0}")]
+    UnsupportedArgWidth(u32),
 }
 
 impl Policy {

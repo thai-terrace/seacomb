@@ -147,7 +147,7 @@ impl Policy {
     /// end:
     /// ```
     pub(super) fn emit_arch_block(&self, b: &mut Builder, arch: Arch) -> (res: Result<(), CompileError>)
-        requires self.wf(), 0 < b.rev@.len(), b.wf()
+        requires self.wf(), self.archs@.contains(arch), 0 < b.rev@.len(), b.wf()
         ensures
             Builder::extends(old(b).rev@, final(b).rev@),
             final(b).wf(),
@@ -191,7 +191,7 @@ impl Policy {
 
     /// Emits an architecture's rules and default return in descending precedence and reverse insertion order.
     fn emit_arch(&self, b: &mut Builder, arch: Arch) -> (res: Result<(), CompileError>)
-        requires self.wf(), 0 < b.rev@.len(), b.wf()
+        requires self.wf(), self.archs@.contains(arch), 0 < b.rev@.len(), b.wf()
         ensures
             Builder::extends(old(b).rev@, final(b).rev@),
             final(b).wf(),
@@ -214,6 +214,7 @@ impl Policy {
         while priority < 8
             invariant
                 priority <= 8,
+                self.archs@.contains(arch),
                 self.wf(), b.wf(), 0 < b.rev@.len(),
                 Builder::extends(old(b).rev@, b.rev@),
                 forall |data: &[u8]| Event::parse(data) is Some ==>
@@ -234,6 +235,7 @@ impl Policy {
                 invariant
                     priority < 8,
                     i <= self.rules@.len(),
+                    self.archs@.contains(arch),
                     self.wf(), b.wf(), 0 < b.rev@.len(),
                     Builder::extends(old(b).rev@, b.rev@),
                     forall |data: &[u8]| Event::parse(data) is Some ==>
@@ -241,7 +243,14 @@ impl Policy {
                             self.dispatch(arch, Event::of(data), priority as int, i as int).to_ret()),
                 decreases self.rules@.len() - i
             {
-                assert(self.rules@[i as int].wf());
+                assert(self.rules@[i as int].wf(self.archs@));
+                assert forall |j: int| 0 <= j < self.rules@[i as int].conds@.len()
+                    implies #[trigger] self.rules@[i as int].conds@[j].wf(arch,
+                        self.rules@[i as int].syscall) by {
+                    let k = choose |k: int| 0 <= k < self.archs@.len() && self.archs@[k] == arch;
+                    assert(self.rules@[i as int].conds@[j].wf(self.archs@[k],
+                        self.rules@[i as int].syscall));
+                }
                 let ghost prev = b.rev@;
                 let ghost rule = self.rules@[i as int];
                 if self.rules[i].action.priority() == priority {

@@ -1,14 +1,22 @@
 //! Tests of filter construction and native seccomp enforcement.
 
-use crate::{Error, Filter};
+use crate::{CheckError, Error, Filter};
+use crate::spec::cbpf::{AluOp, Instr, Src};
 use crate::spec::policy::{Action, Arch, ArgCmp, Rule};
 use crate::spec::syscall::Syscall;
+
+impl Syscall {
+    /// Returns the native six-argument mmap entry point.
+    fn native_mmap() -> Self {
+        if cfg!(target_pointer_width = "64") { Self::Mmap } else { Self::Mmap2 }
+    }
+}
 
 #[test]
 fn native_constructor_adds_only_native() {
     let mut filter = Filter::new_native(Action::Errno(7)).unwrap();
     let native = Arch::native().unwrap();
-    assert!(matches!(filter.add_arch(native), Err(Error::DuplicateArch)));
+    assert!(matches!(filter.add_arch(native), Err(Error::Check(CheckError::DuplicateArch))));
     for arch in [Arch::X86, Arch::X86_64, Arch::Arm, Arch::Aarch64] {
         if arch != native {
             filter.add_arch(arch).unwrap();
@@ -16,13 +24,13 @@ fn native_constructor_adds_only_native() {
     }
     assert!(matches!(
         Filter::new_native(Action::Errno(4096)),
-        Err(Error::InvalidErrno(_))
+        Err(Error::Check(CheckError::InvalidErrno(_)))
     ));
 }
 
 #[test]
 fn cloned_filters_can_be_customized_independently() {
-    let syscall = Syscall::Getpid;
+    let syscall = Syscall::native_mmap();
     let action = Action::Errno(13);
     let mut condition = ArgCmp::eq(0, 1);
     let mut filter = Filter::new_native(Action::Allow).unwrap();
@@ -46,7 +54,7 @@ fn cloned_filters_can_be_customized_independently() {
 fn seven_conditions_compile() {
     let mut filter = Filter::new_native(Action::Allow).unwrap();
     let conds = (0..7).map(|arg| ArgCmp::eq(arg % 6, 0)).collect();
-    filter.add_rule(Action::Errno(1), Syscall::Getpid, conds).unwrap();
+    filter.add_rule(Action::Errno(1), Syscall::native_mmap(), conds).unwrap();
     assert!(filter.policy.to_cbpf().is_ok());
 }
 
@@ -78,7 +86,7 @@ fn action_payload_boundaries() {
     for errno in [4096, u16::MAX] {
         assert!(matches!(
             Filter::new(Action::Errno(errno)),
-            Err(Error::InvalidErrno(_))
+            Err(Error::Check(CheckError::InvalidErrno(_)))
         ));
     }
 }
@@ -88,7 +96,7 @@ fn oversized_program_compiles() {
     let mut filter = Filter::new_native(Action::Allow).unwrap();
     for val in 0..1000 {
         filter
-            .add_rule(Action::Errno(13), Syscall::Getpid, vec![ArgCmp::eq(0, val)])
+            .add_rule(Action::Errno(13), Syscall::native_mmap(), vec![ArgCmp::eq(0, val)])
             .unwrap();
     }
     let program = filter.policy.to_cbpf().unwrap();
@@ -117,7 +125,7 @@ fn installation_checks_instruction_limit_before_side_effects() {
             } else {
                 vec![]
             };
-            filter.add_rule(Action::Allow, Syscall::Getpid, conds).unwrap();
+            filter.add_rule(Action::Allow, Syscall::Mmap, conds).unwrap();
         }
         assert_eq!(filter.policy.to_cbpf().unwrap().instrs.len(), len);
         let child = Child::run_unfiltered(|| {
@@ -217,18 +225,36 @@ impl Child {
         }
     }
 
+    /// Calls the native mmap entry point and checks whether the filter denied it.
+    fn check_mmap(args: [libc::c_ulong; 6], denied: bool) -> bool {
+        #[cfg(target_pointer_width = "64")]
+        let nr = libc::SYS_mmap;
+        #[cfg(target_pointer_width = "32")]
+        let nr = libc::SYS_mmap2;
+        // SAFETY: The arguments are scalar, and the comparison cases use an invalid
+        // length or flags so the kernel does not create a mapping.
+        let ret = unsafe {
+            libc::syscall(nr, args[0], args[1], args[2], args[3], args[4], args[5])
+        };
+        if denied {
+            ret == -1 && Self::errno() == libc::EACCES
+        } else {
+            ret != -1 || Self::errno() != libc::EACCES
+        }
+    }
+
     /// Checks an argument comparison against real syscalls in a filtered child.
     fn assert_cmp(cmp: ArgCmp, cases: &[(libc::c_ulong, bool)]) {
         let arg = cmp.arg as usize;
         let mut filter = Filter::new_native(Action::Allow).unwrap();
         filter
-            .add_rule(Action::Errno(libc::EACCES as u16), Syscall::Getpid, vec![cmp])
+            .add_rule(Action::Errno(libc::EACCES as u16), Syscall::native_mmap(), vec![cmp])
             .unwrap();
         let child = Self::run(&filter, || {
             for (i, &(val, denied)) in cases.iter().enumerate() {
                 let mut args = [0; 6];
                 args[arg] = val;
-                if !Self::check_getpid(args, denied) {
+                if !Self::check_mmap(args, denied) {
                     return i as i32 + 1;
                 }
             }
@@ -279,7 +305,7 @@ fn invalid_updates_preserve_existing_rules() {
         .unwrap();
     assert!(matches!(
         filter.add_arch(Arch::native().unwrap()),
-        Err(Error::DuplicateArch)
+        Err(Error::Check(CheckError::DuplicateArch))
     ));
     for (action, conds) in [
         (Action::Errno(4096), vec![]),
@@ -314,7 +340,7 @@ fn invalid_bad_arch_preserves_previous_action() {
     filter.on_bad_arch(Action::KillProcess).unwrap();
     assert!(matches!(
         filter.on_bad_arch(Action::Errno(4096)),
-        Err(Error::InvalidErrno(_))
+        Err(Error::Check(CheckError::InvalidErrno(_)))
     ));
     assert_eq!(Child::run(&filter, || 0), Child::Killed(libc::SIGSYS));
 }
@@ -385,17 +411,17 @@ fn six_conditions_in_reverse_order_are_conjoined() {
     let mut filter = Filter::new_native(Action::Allow).unwrap();
     let conds = (0..6).rev().map(|arg| ArgCmp::eq(arg, arg as u64 + 1)).collect();
     filter
-        .add_rule(Action::Errno(libc::EACCES as u16), Syscall::Getpid, conds)
+        .add_rule(Action::Errno(libc::EACCES as u16), Syscall::native_mmap(), conds)
         .unwrap();
     let child = Child::run(&filter, || {
         let args = [1, 2, 3, 4, 5, 6];
-        if !Child::check_getpid(args, true) {
+        if !Child::check_mmap(args, true) {
             return 1;
         }
         for arg in 0..6 {
             let mut mismatch = args;
             mismatch[arg] += 1;
-            if !Child::check_getpid(mismatch, false) {
+            if !Child::check_mmap(mismatch, false) {
                 return arg as i32 + 2;
             }
         }
@@ -515,40 +541,38 @@ fn masked_equality_handles_each_word_independently() {
 
 #[cfg(all(target_os = "linux", target_pointer_width = "32"))]
 #[test]
-fn narrow_architectures_truncate_comparison_values() {
-    for (make_cmp, below, equal, above) in [
-        (ArgCmp::eq as fn(u32, u64) -> ArgCmp, false, true, false),
-        (ArgCmp::ne, true, false, true),
-        (ArgCmp::lt, true, false, false),
-        (ArgCmp::le, true, true, false),
-        (ArgCmp::gt, false, false, true),
-        (ArgCmp::ge, false, true, true),
+fn narrow_architectures_reject_oversized_comparison_values() {
+    for make_cmp in [
+        ArgCmp::eq as fn(u32, u64) -> ArgCmp,
+        ArgCmp::ne, ArgCmp::lt, ArgCmp::le, ArgCmp::gt, ArgCmp::ge,
     ] {
-        Child::assert_cmp(
-            make_cmp(0, 0x1_8000_0000),
-            &[(0x7fff_ffff, below), (0x8000_0000, equal), (0x8000_0001, above)],
-        );
+        let mut filter = Filter::new_native(Action::Allow).unwrap();
+        assert!(matches!(
+            filter.add_rule(Action::Errno(1), Syscall::native_mmap(),
+                vec![make_cmp(0, 0x1_8000_0000)]),
+            Err(Error::Check(CheckError::InvalidCompareValue { .. })),
+        ));
     }
 }
 
 #[cfg(all(target_os = "linux", target_pointer_width = "32"))]
 #[test]
-fn narrow_architectures_truncate_masks() {
-    Child::assert_cmp(
-        ArgCmp::masked_eq(0, 0xffff_ffff_0000_0000, u64::MAX),
-        &[(0, true), (libc::c_ulong::MAX, true)],
-    );
-    Child::assert_cmp(
-        ArgCmp::masked_eq(0, 0x1_0000_00ff, 0x2_0000_002a),
-        &[(42, true), (0xffff_ff2a, true), (43, false)],
-    );
+fn narrow_architectures_reject_oversized_masks() {
+    for mask in [0xffff_ffff_0000_0000, 0x1_0000_00ff] {
+        let mut filter = Filter::new_native(Action::Allow).unwrap();
+        assert!(matches!(
+            filter.add_rule(Action::Errno(1), Syscall::native_mmap(),
+                vec![ArgCmp::masked_eq(0, mask, 0)]),
+            Err(Error::Check(CheckError::InvalidCompareMask { .. })),
+        ));
+    }
 }
 
 #[cfg(target_os = "linux")]
 #[test]
 fn zero_mask_matches_every_argument() {
     Child::assert_cmp(
-        ArgCmp::masked_eq(0, 0, u64::MAX),
+        ArgCmp::masked_eq(0, 0, 0),
         &[
             (0, true),
             (1, true),
@@ -560,16 +584,13 @@ fn zero_mask_matches_every_argument() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn masked_equality_ignores_value_bits_outside_mask() {
-    Child::assert_cmp(
-        ArgCmp::masked_eq(0, 0xf0, 0x1_af),
-        &[
-            (0xa0, true),
-            (0xaf, true),
-            (libc::c_ulong::MAX - 0x50, true),
-            (0xb0, false),
-        ],
-    );
+fn masked_equality_rejects_value_bits_outside_mask() {
+    let mut filter = Filter::new_native(Action::Allow).unwrap();
+    assert!(matches!(
+        filter.add_rule(Action::Errno(1), Syscall::native_mmap(),
+            vec![ArgCmp::masked_eq(0, 0xf0, 0x1_af)]),
+        Err(Error::Check(CheckError::InvalidMaskedValue { arg: 0, mask: 0xf0, value: 0x1_af, .. })),
+    ));
 }
 
 #[cfg(target_os = "linux")]
@@ -868,7 +889,7 @@ fn long_rule_chains_preserve_matches_and_fallthrough() {
         filter
             .add_rule(
                 Action::Errno(libc::EACCES as u16),
-                Syscall::Getpid,
+                Syscall::native_mmap(),
                 vec![ArgCmp::eq(0, val)],
             )
             .unwrap();
@@ -876,7 +897,7 @@ fn long_rule_chains_preserve_matches_and_fallthrough() {
     assert!(filter.policy.to_cbpf().ok().unwrap().instrs.len() > 255);
     let child = Child::run(&filter, || {
         for (i, val) in [0, 50, 99, 100].iter().enumerate() {
-            if !Child::check_getpid([*val, 0, 0, 0, 0, 0], *val < 100) {
+            if !Child::check_mmap([*val, 0, 0, 0, 0, 0], *val < 100) {
                 return i as i32 + 1;
             }
         }
@@ -1069,35 +1090,37 @@ fn argument_out_of_range() {
     let conds = vec![ArgCmp::eq(6, 0)];
     assert!(matches!(
         filter.add_rule(Action::Errno(1), Syscall::Lseek, conds),
-        Err(Error::InvalidArg(6)),
+        Err(Error::Check(CheckError::InvalidArg { given: 6, total: 3, syscall: Syscall::Lseek })),
     ));
 }
 
 #[test]
 fn rule_checks_condition_indices() {
+    let archs = vec![Arch::native().unwrap()];
+    let syscall = Syscall::native_mmap();
     let rule = |conds| Rule {
         action: Action::Allow,
-        syscall: Syscall::Getpid,
+        syscall,
         conds,
         no_mux: false,
     };
-    assert!(rule(vec![]).check().is_ok());
+    assert!(rule(vec![]).check(archs.as_slice()).is_ok());
     assert!(rule((0..6).rev().map(|arg| ArgCmp::eq(arg, 0)).collect())
-        .check()
+        .check(archs.as_slice())
         .is_ok());
     assert!(rule((0..7).map(|arg| ArgCmp::eq(arg % 6, 0)).collect())
-        .check()
+        .check(archs.as_slice())
         .is_ok());
     assert!(matches!(
-        rule((0..7).map(|arg| ArgCmp::eq(arg, 0)).collect()).check(),
-        Err(Error::InvalidArg(6)),
+        rule((0..7).map(|arg| ArgCmp::eq(arg, 0)).collect()).check(archs.as_slice()),
+        Err(CheckError::InvalidArg { given: 6, total: 6, syscall: s }) if s == syscall,
     ));
     assert!(matches!(
-        rule(vec![ArgCmp::eq(u32::MAX, 0)]).check(),
-        Err(Error::InvalidArg(u32::MAX)),
+        rule(vec![ArgCmp::eq(u32::MAX, 0)]).check(archs.as_slice()),
+        Err(CheckError::InvalidArg { given: u32::MAX, total: 6, syscall: s }) if s == syscall,
     ));
     assert!(rule(vec![ArgCmp::eq(5, 0), ArgCmp::eq(0, 0), ArgCmp::ne(5, 1)])
-        .check()
+        .check(archs.as_slice())
         .is_ok());
 }
 
@@ -1120,45 +1143,137 @@ fn action_checks_return_validation_errors() {
     for errno in [4096, u16::MAX] {
         assert!(matches!(
             Action::Errno(errno).check(),
-            Err(Error::InvalidErrno(_))
+            Err(CheckError::InvalidErrno(_))
         ));
     }
 }
 
 #[test]
 fn rule_checks_propagate_validation_errors() {
+    let archs = vec![Arch::native().unwrap()];
+    let syscall = Syscall::native_mmap();
     let rule = |action, conds| Rule {
         action,
-        syscall: Syscall::Getpid,
+        syscall,
         conds,
         no_mux: false,
     };
-    assert!(rule(Action::Errno(1), vec![]).check().is_ok());
+    assert!(rule(Action::Errno(1), vec![]).check(archs.as_slice()).is_ok());
     assert!(matches!(
-        rule(Action::Errno(4096), vec![]).check(),
-        Err(Error::InvalidErrno(_))
+        rule(Action::Errno(4096), vec![]).check(archs.as_slice()),
+        Err(CheckError::InvalidErrno(_))
     ));
     assert!(Filter::new_native(Action::Allow)
         .unwrap()
         .add_rule(Action::Allow, Syscall::Getpid, vec![])
         .is_ok());
     assert!(matches!(
-        rule(Action::Errno(1), (0..7).map(|arg| ArgCmp::eq(arg, 0)).collect()).check(),
-        Err(Error::InvalidArg(6)),
+        rule(Action::Errno(1), (0..7).map(|arg| ArgCmp::eq(arg, 0)).collect())
+            .check(archs.as_slice()),
+        Err(CheckError::InvalidArg { given: 6, total: 6, syscall: s }) if s == syscall,
     ));
     assert!(matches!(
-        rule(Action::Errno(1), vec![ArgCmp::eq(6, 0)]).check(),
-        Err(Error::InvalidArg(6)),
+        rule(Action::Errno(1), vec![ArgCmp::eq(6, 0)]).check(archs.as_slice()),
+        Err(CheckError::InvalidArg { given: 6, total: 6, syscall: s }) if s == syscall,
     ));
     assert!(rule(Action::Errno(1), vec![ArgCmp::eq(1, 0), ArgCmp::ne(1, 1)])
-        .check()
+        .check(archs.as_slice())
         .is_ok());
 }
 
 #[test]
 fn skip_rule_is_allowed() {
     let mut filter = Filter::new_native(Action::Allow).unwrap();
-    assert!(filter.add_rule(Action::Errno(1), Syscall::Skip, vec![ArgCmp::eq(5, 0)]).is_ok());
+    assert!(filter.add_rule(Action::Errno(1), Syscall::Skip, vec![]).is_ok());
+    assert!(matches!(
+        filter.add_rule(Action::Errno(1), Syscall::Skip, vec![ArgCmp::eq(0, 0)]),
+        Err(Error::Check(CheckError::InvalidArg { given: 0, total: 0, syscall: Syscall::Skip })),
+    ));
+}
+
+#[test]
+fn zero_argument_syscall_rejects_conditions() {
+    let mut filter = Filter::new_native(Action::Allow).unwrap();
+    assert!(matches!(
+        filter.add_rule(Action::Errno(1), Syscall::Getpid, vec![ArgCmp::eq(0, 0)]),
+        Err(Error::Check(CheckError::InvalidArg { given: 0, total: 0, syscall: Syscall::Getpid })),
+    ));
+}
+
+#[test]
+fn typed_condition_errors_report_the_argument_type() {
+    let mut filter = Filter::new_native(Action::Allow).unwrap();
+    assert!(matches!(
+        filter.add_rule(Action::Errno(1), Syscall::Fchmodat, vec![ArgCmp::lt(1, 0)]),
+        Err(Error::Check(CheckError::UnsupportedCompare { arg: 1, ty: crate::PrimType::Ptr, .. })),
+    ));
+    assert!(matches!(
+        filter.add_rule(Action::Errno(1), Syscall::Fchmod, vec![ArgCmp::eq(1, 0x1_0000)]),
+        Err(Error::Check(CheckError::InvalidCompareValue { arg: 1, ty: crate::PrimType::U(16), .. })),
+    ));
+    assert!(matches!(
+        filter.add_rule(Action::Errno(1), Syscall::Fchmod,
+            vec![ArgCmp::masked_eq(1, 0x1_0000, 0)]),
+        Err(Error::Check(CheckError::InvalidCompareMask { arg: 1, ty: crate::PrimType::U(16), .. })),
+    ));
+}
+
+#[test]
+fn adding_architecture_rejects_signature_conflicts() {
+    let mut filter = Filter::new(Action::Allow).unwrap();
+    filter.add_arch(Arch::X86).unwrap();
+    filter.add_rule(Action::Errno(1), Syscall::Chown, vec![ArgCmp::eq(1, 1)]).unwrap();
+    let before = filter.clone();
+    assert!(matches!(filter.add_arch(Arch::X86_64), Err(Error::Check(CheckError::IncompatSigs))));
+    assert_eq!(filter, before);
+
+    let mut compatible = Filter::new(Action::Allow).unwrap();
+    compatible.add_arch(Arch::X86_64).unwrap();
+    compatible.add_rule(Action::Errno(1), Syscall::Lseek,
+        vec![ArgCmp::eq(1, 0)]).unwrap();
+    compatible.add_arch(Arch::Aarch64).unwrap();
+    assert!(compatible.policy.to_cbpf().is_ok());
+}
+
+#[test]
+fn split_arguments_use_adjacent_or_aligned_slots() {
+    for (arch, expected) in [
+        (Arch::X86, vec![40, 48]),
+        (Arch::Arm, vec![48, 56]),
+    ] {
+        let mut filter = Filter::new(Action::Allow).unwrap();
+        filter.add_arch(arch).unwrap();
+        filter.add_rule(Action::Errno(1), Syscall::Pread64,
+            vec![ArgCmp::eq(3, 0x1_0000_0000)]).unwrap();
+        let program = filter.policy.to_cbpf().unwrap();
+        let mut loads: Vec<u32> = program.instrs.iter().filter_map(|instr| match instr {
+            Instr::LdAbs(k) if *k >= 16 => Some(*k),
+            _ => None,
+        }).collect();
+        loads.sort_unstable();
+        assert_eq!(loads, expected, "architecture: {arch:?}");
+    }
+}
+
+#[test]
+fn signed_and_narrow_comparisons_add_one_alu_instruction() {
+    for arch in [Arch::X86, Arch::X86_64] {
+        let mut filter = Filter::new(Action::Allow).unwrap();
+        filter.add_arch(arch).unwrap();
+        filter.add_rule(Action::Errno(1), Syscall::Lseek,
+            vec![ArgCmp::lt(1, u64::MAX)]).unwrap();
+        let program = filter.policy.to_cbpf().unwrap();
+        assert_eq!(program.instrs.iter().filter(|instr|
+            **instr == Instr::Alu(AluOp::Xor, Src::K(0x8000_0000))).count(), 1);
+    }
+
+    let mut filter = Filter::new(Action::Allow).unwrap();
+    filter.add_arch(Arch::Aarch64).unwrap();
+    filter.add_rule(Action::Errno(1), Syscall::Fchmod,
+        vec![ArgCmp::eq(1, 0xFFFF)]).unwrap();
+    let program = filter.policy.to_cbpf().unwrap();
+    assert_eq!(program.instrs.iter().filter(|instr|
+        **instr == Instr::Alu(AluOp::And, Src::K(0xFFFF))).count(), 1);
 }
 
 #[test]
@@ -1169,7 +1284,7 @@ fn mux_rules_require_exact_mode_for_argument_conditions() {
         let rule_count = filter.policy.rules.len();
         assert!(matches!(
             filter.add_rule(Action::Errno(1), syscall, conds.clone()),
-            Err(Error::InvalidMuxConditions)
+            Err(Error::Check(CheckError::InvalidMuxConditions))
         ));
         assert_eq!(filter.policy.rules.len(), rule_count);
         filter.add_rule_exact(Action::Errno(1), syscall, conds).unwrap();
