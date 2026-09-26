@@ -441,10 +441,7 @@ impl PrimType {
     pub(crate) fn exec_signed(self) -> (res: bool)
         ensures res == self.signed()
     {
-        match self {
-            PrimType::I(_) | PrimType::IWord => true,
-            _ => false,
-        }
+        matches!(self, PrimType::I(_) | PrimType::IWord)
     }
 
     /// Returns the mask of this type on `arch`.
@@ -1967,7 +1964,7 @@ impl ArgCmp {
         {
             let width = sig[i].exec_bits(arch);
             if (arch == Arch::X86 || arch == Arch::Arm) && width == 64 {
-                if arch == Arch::Arm && slot % 2 != 0 {
+                if arch == Arch::Arm && !slot.is_multiple_of(2) {
                     slot += 1;
                 }
                 if slot > 4 {
@@ -1991,7 +1988,7 @@ impl ArgCmp {
         if width != 16 && width != 32 && width != 64 {
             return Err(CompileError::UnsupportedArgWidth(width));
         }
-        if arch == Arch::Arm && width == 64 && slot % 2 != 0 {
+        if arch == Arch::Arm && width == 64 && !slot.is_multiple_of(2) {
             slot += 1;
         }
         proof {
@@ -2068,6 +2065,7 @@ impl ArgCmp {
     }
 
     /// Emits a narrow or signed one-word comparison.
+    #[allow(clippy::too_many_arguments)]
     fn emit_word(&self, b: &mut Builder, _arch: Arch, _syscall: Syscall,
         _sig: &[PrimType], slot: u32, width: u32, signed_order: bool,
         fail: Label) -> (res: Result<(), CompileError>)
@@ -2223,6 +2221,7 @@ impl ArgCmp {
     }
 
     /// Emits a two-word comparison for a 64-bit argument.
+    #[allow(clippy::too_many_arguments)]
     #[verifier::spinoff_prover]
     fn emit_wide(&self, b: &mut Builder, arch: Arch, _syscall: Syscall,
         _sig: &[PrimType], slot: u32, signed_order: bool,

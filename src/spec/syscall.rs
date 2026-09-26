@@ -76,13 +76,11 @@ macro_rules! syscalls {
                 }
 
                 /// Executable version of [`Self::spec_signature`].
-                /// TODO: Assumed to be equivalent for now since
-                /// verifying all ~1600 arms takes too long.
-                #[verifier::external_body]
                 #[allow(unreachable_patterns)]
                 pub fn signature(&self, arch: super::policy::Arch) -> (res: &'static [PrimType])
                     ensures res@ =~= self.spec_signature(arch)
                 {
+                    reveal(Syscall::spec_signature);
                     match self {
                         $(
                             $name::$variant => match arch {
