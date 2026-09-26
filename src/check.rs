@@ -42,7 +42,7 @@ pub enum CheckError {
 impl Action {
     /// Checks whether this action contains a valid value.
     pub(crate) fn check(&self) -> (res: Result<(), CheckError>)
-        ensures (res is Ok) == self.wf()
+        ensures res is Ok <==> self.wf()
     {
         match self {
             Action::Errno(e) if (*e as u32) > Self::MAX_ERRNO => Err(CheckError::InvalidErrno(*e)),
@@ -53,9 +53,9 @@ impl Action {
 
 impl ArgCmp {
     /// Checks a condition against one syscall signature.
-    pub(crate) fn check(&self, arch: Arch, syscall: Syscall, sig: &[PrimType]) -> (res: Result<(), CheckError>)
+    fn check(&self, arch: Arch, syscall: Syscall, sig: &[PrimType]) -> (res: Result<(), CheckError>)
         requires sig@ =~= syscall.spec_signature(arch)
-        ensures res is Ok ==> self.wf(arch, syscall)
+        ensures res is Ok <==> self.wf(arch, syscall)
     {
         if self.arg as usize >= sig.len() {
             return Err(CheckError::InvalidArg {
@@ -97,7 +97,7 @@ impl ArgCmp {
 impl Rule {
     /// Checks the rule against every enabled architecture.
     pub(crate) fn check(&self, archs: &[Arch]) -> (res: Result<(), CheckError>)
-        ensures res is Ok ==> self.wf(archs@)
+        ensures res is Ok <==> self.wf(archs@)
     {
         self.action.check()?;
         if !self.no_mux && !self.conds.is_empty()
@@ -118,6 +118,7 @@ impl Rule {
                 !self.no_mux && self.syscall.can_mux() ==> self.conds@.len() == 0,
                 0 < archs@.len(),
                 first@ =~= self.syscall.spec_signature(archs@[0]),
+                self.conds@.len() > 0,
                 i <= archs@.len(),
                 forall |k: int| 0 <= k < i ==>
                     self.syscall.spec_signature(#[trigger] archs@[k]) =~= first@,
@@ -128,6 +129,13 @@ impl Rule {
             let arch = archs[i];
             let sig = self.syscall.signature(arch);
             if sig.len() != first.len() {
+                proof {
+                    assert(sig@ != first@);
+                    assert(i > 0);
+                    assert(self.syscall.spec_signature(archs@[0])
+                        != self.syscall.spec_signature(archs@[i as int]));
+                    assert(!self.wf(archs@));
+                }
                 return Err(CheckError::IncompatSigs);
             }
             let mut t: usize = 0;
@@ -135,10 +143,23 @@ impl Rule {
                 invariant
                     t <= sig@.len(),
                     sig@.len() == first@.len(),
+                    self.conds@.len() > 0,
+                    0 < archs@.len(),
+                    i < archs@.len(),
+                    arch == archs@[i as int],
+                    first@ =~= self.syscall.spec_signature(archs@[0]),
+                    sig@ =~= self.syscall.spec_signature(arch),
                     forall |k: int| 0 <= k < t ==> sig@[k] == first@[k],
                 decreases sig@.len() - t
             {
                 if sig[t] != first[t] {
+                    proof {
+                        assert(sig@ != first@);
+                        assert(i > 0);
+                        assert(self.syscall.spec_signature(archs@[0])
+                            != self.syscall.spec_signature(archs@[i as int]));
+                        assert(!self.wf(archs@));
+                    }
                     return Err(CheckError::IncompatSigs);
                 }
                 t += 1;
@@ -150,12 +171,20 @@ impl Rule {
             while j < self.conds.len()
                 invariant
                     j <= self.conds@.len(),
+                    i < archs@.len(),
+                    arch == archs@[i as int],
                     sig@ =~= self.syscall.spec_signature(arch),
                     forall |l: int| 0 <= l < j ==>
                         #[trigger] self.conds@[l].wf(arch, self.syscall),
                 decreases self.conds@.len() - j
             {
-                self.conds[j].check(arch, self.syscall, sig)?;
+                if let Err(err) = self.conds[j].check(arch, self.syscall, sig) {
+                    proof {
+                        assert(!self.conds@[j as int].wf(arch, self.syscall));
+                        assert(!self.wf(archs@));
+                    }
+                    return Err(err);
+                }
                 j += 1;
             }
             proof {
